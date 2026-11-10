@@ -27,12 +27,14 @@ export function DiscordItem({
 
     return (
         <button
-            className="cursor-pointer w-full text-left px-4 py-2 flex justify-between items-center  disabled:cursor-default disabled:hover:bg-transparent disabled:[&>*:first-child]:opacity-50 hover:bg-sky-700/20"
+            className="cursor-pointer w-full text-left px-4 py-2 flex justify-between items-center  disabled:cursor-default disabled:hover:bg-transparent disabled:[&>*:first-child]:opacity-50 hover:bg-sky-700/20 text-nowrap overflow-hidden gap-2"
             disabled={disabled}
             onClick={handleClick}
         >
-            <div>{tab.channelName}</div>
-            <div>
+            <div className="overflow-hidden text-ellipsis">
+                {tab.channelName}
+            </div>
+            <div className="w-16 shrink-0 text-right flex justify-end">
                 {syncing && <span className="text-white/50">Syncing</span>}
                 {tab.error && (
                     <>
