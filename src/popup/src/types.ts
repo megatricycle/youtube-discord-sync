@@ -20,6 +20,20 @@ export type YouTubeTabInformation = {
     options: YouTubeSyncOptions;
 };
 
+export type YouTubeTabInformationValid = Omit<
+    YouTubeTabInformation,
+    'metadata'
+> & {
+    metadata: YouTubeMetadata;
+};
+
+export type YouTubeTabInformationInvalid = Omit<
+    YouTubeTabInformation,
+    'metadata'
+> & {
+    metadata: null;
+};
+
 export type MessageEvent = {
     message: string;
 };
@@ -49,3 +63,15 @@ export type DiscordTab = {
           channelName: null;
       }
 );
+
+export type SyncOption = 'youtube' | 'timestamp';
+
+export type DiscordYouTubeSync = {
+    type: 'youtube';
+    tabInformation: YouTubeTabInformationValid;
+};
+
+export type DiscordTabInformation = {
+    id: number;
+    currentSync: DiscordYouTubeSync | null;
+};
