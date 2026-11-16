@@ -1,9 +1,0 @@
-@import "tailwindcss";
-
-.react-tooltip {
-  max-width: 200px;
-}
-
-hr {
-  opacity: 0.2;
-}
