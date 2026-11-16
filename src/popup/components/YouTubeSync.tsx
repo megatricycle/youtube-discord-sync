@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { FaPause, FaPlay } from 'react-icons/fa';
-import { YouTubeSyncOptions, YouTubeTabInformationValid } from '../types';
+import type {
+    YouTubeMessage,
+    YouTubeSyncOptions,
+    YouTubeTabInformationValid,
+    YouTubeTimestampResponse,
+} from '../../types';
 import { ClearButton } from './ClearButton';
 
 type YouTubeSyncProps = {
@@ -29,9 +34,10 @@ export function YouTubeSync({ tab, onOptionChange }: YouTubeSyncProps) {
 
     function listenForTimestampUpdate() {
         async function poll() {
-            const response = (await chrome.tabs.sendMessage(tab.id, {
-                message: 'fetch_timestamp',
-            })) as { timestamp: string | null };
+            const response: YouTubeTimestampResponse =
+                await chrome.tabs.sendMessage(tab.id, {
+                    message: 'fetch_timestamp',
+                } satisfies YouTubeMessage);
 
             setCurrentTimestamp(
                 response.timestamp ? new Date(response.timestamp) : null,

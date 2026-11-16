@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { DiscordTabInformation } from '../types';
+import { DiscordTabInformation } from '../../types';
 import { getCurrentTab, getDiscordTabInformation } from '../utils/chrome';
 import { DiscordSyncSelector } from './DiscordSyncSelector';
 import { YouTubeSync } from './YouTubeSync';

@@ -1,28 +1,11 @@
-export {};
-
-type YouTubeSyncOptions = {
-    offset: number;
-    isPaused: boolean;
-    isPremiere: boolean;
-};
-
-type YouTubeMetadata = {
-    id: string | null;
-    title: string;
-    thumbnail: string | undefined;
-    channelTitle: string;
-    isLivestream: boolean;
-    startDateTime: Date;
-    endDateTime: Date;
-    isPremiere: boolean;
-};
-
-type YouTubeMessage =
-    | { message: 'fetch_info' }
-    | { message: 'sync_start'; tabId: number }
-    | { message: 'sync_stop'; tabId: number }
-    | { message: 'sync_option_update'; options: Partial<YouTubeSyncOptions> }
-    | { message: 'fetch_timestamp' };
+import type {
+    YouTubeBackgroundMessage,
+    YouTubeMessage,
+    YouTubeMetadata,
+    YouTubeSyncOptions,
+    YouTubeTabInformationResponse,
+    YouTubeTimestampResponse,
+} from '../types';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -86,7 +69,11 @@ async function run(): Promise<void> {
         }
 
         if (request.message === 'fetch_info') {
-            sendResponse({ metadata, activeSyncs: tabsToSync, options });
+            sendResponse({
+                metadata,
+                activeSyncs: tabsToSync,
+                options,
+            } satisfies YouTubeTabInformationResponse);
         }
 
         if (request.message === 'sync_start') {
@@ -107,12 +94,16 @@ async function run(): Promise<void> {
 
         if (request.message === 'fetch_timestamp') {
             if (!videoStreamElement) {
-                sendResponse({ timestamp: null });
+                sendResponse({
+                    timestamp: null,
+                } satisfies YouTubeTimestampResponse);
 
                 return;
             }
 
-            sendResponse({ timestamp: getTimestamp() });
+            sendResponse({
+                timestamp: getTimestamp(),
+            } satisfies YouTubeTimestampResponse);
         }
     }
 
@@ -161,7 +152,7 @@ async function run(): Promise<void> {
                 message: 'video_timeupdate',
                 tabId: tabId,
                 timestamp,
-            });
+            } satisfies YouTubeBackgroundMessage);
         });
     }
 
@@ -201,7 +192,7 @@ async function run(): Promise<void> {
             chrome.runtime.sendMessage({
                 message: 'sync_stop',
                 tabId,
-            });
+            } satisfies YouTubeBackgroundMessage);
         });
 
         tabsToSync = [];
@@ -234,7 +225,7 @@ function getMetadata(): YouTubeMetadata | null {
     const microformat = parsedMicroformat;
     const url = new URL(canonicalUrl);
 
-    let id = null;
+    let id: string | null = null;
 
     if (url.pathname.includes('/live/')) {
         id = url.pathname.split('/live/')[1] ?? null;
@@ -247,7 +238,7 @@ function getMetadata(): YouTubeMetadata | null {
     const thumbnail =
         Array.isArray(thumbnailUrls) && typeof thumbnailUrls[0] === 'string'
             ? thumbnailUrls[0]
-            : undefined;
+            : null;
     const channelTitle =
         typeof microformat.author === 'string' ? microformat.author : '';
 
@@ -288,7 +279,7 @@ function getMetadata(): YouTubeMetadata | null {
 
     const endDateTime = new Date(endDateValue);
 
-    if (!title || !channelTitle || !startDateTime) {
+    if (!id || !title || !channelTitle || !startDateTime) {
         throw new Error('Incomplete YouTube metadata');
     }
 

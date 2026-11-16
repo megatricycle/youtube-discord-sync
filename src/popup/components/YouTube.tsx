@@ -1,10 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
+import type {
+    BackgroundMessage,
+    DiscordMessage,
+    DiscordSyncStopMessage,
     DiscordTab,
+    YouTubeMessage,
     YouTubeSyncOptions,
     YouTubeTabInformationInvalid,
     YouTubeTabInformationValid,
-} from '../types';
+} from '../../types';
 import {
     getCurrentTab,
     getDiscordTabsWithInformation,
@@ -43,7 +47,7 @@ export function YouTube() {
         chrome.tabs.sendMessage(tabInformation.id, {
             message: 'sync_option_update',
             options,
-        });
+        } satisfies YouTubeMessage);
 
         queryClient.invalidateQueries({
             queryKey: ['youTubeTabInformation'],
@@ -58,11 +62,11 @@ export function YouTube() {
         chrome.tabs.sendMessage(tabInformation.id, {
             message: 'sync_start',
             tabId,
-        });
+        } satisfies YouTubeMessage);
         chrome.tabs.sendMessage(tabId, {
             message: 'sync_start',
             tabId: tabInformation.id,
-        });
+        } satisfies DiscordMessage);
 
         queryClient.invalidateQueries({
             queryKey: ['youTubeTabInformation'],
@@ -78,19 +82,19 @@ export function YouTube() {
         chrome.tabs.sendMessage(tabInformation.id, {
             message: 'sync_stop',
             tabId,
-        });
+        } satisfies YouTubeMessage);
 
         // to discord tab
         chrome.tabs.sendMessage(tabId, {
             message: 'sync_stop',
             tabId: tabInformation.id,
-        });
+        } satisfies DiscordSyncStopMessage);
 
         // to background
         chrome.runtime.sendMessage({
             message: 'sync_stop',
             tabId,
-        });
+        } satisfies BackgroundMessage);
 
         queryClient.invalidateQueries({
             queryKey: ['youTubeTabInformation'],

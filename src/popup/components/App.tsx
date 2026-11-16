@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { BackgroundMessage } from '../../types';
 import { getCurrentTab } from '../utils/chrome';
 import { Default } from './Default';
 import { Discord } from './Discord';
@@ -25,8 +26,8 @@ function App() {
 
             chrome.runtime.sendMessage({
                 message: 'popup_opened',
-                tabId: tab.id,
-            });
+                tabId: tab.id!,
+            } satisfies BackgroundMessage);
         }
 
         run();

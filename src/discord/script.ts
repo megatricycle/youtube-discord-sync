@@ -1,16 +1,12 @@
-export {};
+import type {
+    CurrentSync,
+    DiscordMessage,
+    DiscordTabInformationResponse,
+} from '../types';
 
 // as of now any incoming sync requests are assumed to be from a YouTube tab
 // this can change in the future once we start supporting other websites
 // @TODO: change these to make it clear that these come from a YouTube tab
-
-type DiscordMessage =
-    | { message: 'video_timeupdate'; timestamp: string }
-    | { message: 'sync_start'; tabId: number }
-    | { message: 'sync_stop' }
-    | { message: 'get_tab_information' };
-
-type CurrentSync = { type: 'youtube'; tabId: number } | null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -103,7 +99,7 @@ function handleMessage(
     }
 
     if (request.message === 'get_tab_information') {
-        sendResponse({ currentSync });
+        sendResponse({ currentSync } satisfies DiscordTabInformationResponse);
     }
 }
 

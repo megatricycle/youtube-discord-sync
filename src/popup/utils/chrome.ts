@@ -1,9 +1,13 @@
-import {
+import type {
+    DiscordMessage,
     DiscordTab,
     DiscordTabInformation,
+    DiscordTabInformationResponse,
+    YouTubeMessage,
     YouTubeTabInformationInvalid,
+    YouTubeTabInformationResponse,
     YouTubeTabInformationValid,
-} from '../types';
+} from '../../types';
 
 export async function getCurrentTab() {
     return (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
@@ -12,12 +16,10 @@ export async function getCurrentTab() {
 export async function getYouTubeTabInformation(
     tabId: NonNullable<chrome.tabs.Tab['id']>,
 ): Promise<YouTubeTabInformationValid | YouTubeTabInformationInvalid> {
-    const response = (await chrome.tabs.sendMessage(tabId, {
-        message: 'fetch_info',
-    })) as Omit<
-        YouTubeTabInformationValid | YouTubeTabInformationInvalid,
-        'id'
-    > | null;
+    const response: YouTubeTabInformationResponse | null =
+        await chrome.tabs.sendMessage(tabId, {
+            message: 'fetch_info',
+        } satisfies YouTubeMessage);
 
     if (!response) {
         throw new Error('Failed to fetch tab information');
@@ -74,14 +76,10 @@ export async function getDiscordTabsWithInformation() {
 export async function getDiscordTabInformation(
     tabId: NonNullable<chrome.tabs.Tab['id']>,
 ): Promise<DiscordTabInformation> {
-    const response = (await chrome.tabs.sendMessage(tabId, {
-        message: 'get_tab_information',
-    })) as {
-        currentSync: {
-            type: 'youtube';
-            tabId: number;
-        } | null;
-    };
+    const response: DiscordTabInformationResponse =
+        await chrome.tabs.sendMessage(tabId, {
+            message: 'get_tab_information',
+        } satisfies DiscordMessage);
 
     if (!response) {
         throw new Error('Failed to fetch tab information');

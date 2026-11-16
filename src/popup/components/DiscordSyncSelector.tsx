@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { IconType } from 'react-icons';
 import { FaYoutube } from 'react-icons/fa';
-import { SyncOption } from '../types';
+import { SyncOption } from '../../types';
 import { DiscordYouTubeSyncPage } from './DiscordYouTubeSyncPage';
 import { SyncItem } from './SyncItem';
 import { SyncWithHeader } from './SyncWithHeader';

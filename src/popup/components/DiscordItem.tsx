@@ -1,6 +1,6 @@
 import { FaExclamationCircle } from 'react-icons/fa';
 import { Tooltip } from 'react-tooltip';
-import { DiscordTab } from '../types';
+import { DiscordTab } from '../../types';
 
 type DiscordItemProps = {
     tab: DiscordTab;

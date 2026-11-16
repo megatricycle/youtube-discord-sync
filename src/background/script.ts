@@ -1,8 +1,4 @@
-export {};
-
-type BackgroundMessage =
-    | { message: 'video_timeupdate'; tabId: number; timestamp: string }
-    | { message: 'sync_stop'; tabId: number };
+import type { BackgroundMessage, DiscordMessage } from '../types';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -27,7 +23,7 @@ function handleMessage(request: unknown, sender: chrome.runtime.MessageSender) {
         chrome.tabs.sendMessage(message.tabId, {
             message: message.message,
             timestamp: message.timestamp,
-        });
+        } satisfies DiscordMessage);
     }
 
     // this case happens when youtube content script triggers the stop
@@ -46,7 +42,7 @@ function handleMessage(request: unknown, sender: chrome.runtime.MessageSender) {
         chrome.tabs.sendMessage(message.tabId, {
             message: message.message,
             tabId: senderTabId,
-        });
+        } satisfies DiscordMessage);
     }
 }
 
