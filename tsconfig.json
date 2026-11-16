@@ -15,8 +15,13 @@
         "noUnusedLocals": true,
         "noUnusedParameters": true,
         "noFallthroughCasesInSwitch": true,
-        "types": ["chrome"]
+        "types": ["chrome", "node"]
     },
-    "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
+    "include": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tests/**/*.ts",
+        "vite.config.ts"
+    ],
     "exclude": ["dist", "node_modules"]
 }
