@@ -1,5 +1,9 @@
+// as of now any incoming sync requests are assumed to be from a YouTube tab
+// this can change in the future once we start supporting other websites
+// @TODO: change these to make it clear that these come from a YouTube tab
+
 async function run() {
-    let tabsToSync = [];
+    let currentSync = null;
 
     function handleMessage(request, sender, sendResponse) {
         if (request.message === 'video_timeupdate') {
@@ -52,18 +56,25 @@ async function run() {
         }
 
         if (request.message === 'sync_stop') {
-            syncStop(request.tabId);
+            syncStop();
+        }
+
+        if (request.message === 'get_tab_information') {
+            sendResponse({ currentSync });
         }
     }
 
     chrome.runtime.onMessage.addListener(handleMessage);
 
     function syncStart(tabId) {
-        tabsToSync.push({ tabId });
+        currentSync = {
+            type: 'youtube',
+            tabId,
+        };
     }
 
-    function syncStop(tabId) {
-        tabsToSync = tabsToSync.filter((tab) => tab.tabId !== tabId);
+    function syncStop() {
+        currentSync = null;
     }
 
     return true;

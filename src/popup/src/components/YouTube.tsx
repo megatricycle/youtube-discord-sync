@@ -1,11 +1,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     DiscordTab,
-    YouTubeMetadata,
     YouTubeSyncOptions,
-    YouTubeTabInformation,
+    YouTubeTabInformationInvalid,
+    YouTubeTabInformationValid,
 } from '../types';
-import { getCurrentTab, getDiscordTabs } from '../utils/chrome';
+import {
+    getCurrentTab,
+    getDiscordTabsWithInformation,
+    getYouTubeTabInformation,
+} from '../utils/chrome';
+import { DiscordItem } from './DiscordItem';
+import { SyncWithHeader } from './SyncWithHeader';
 import { YouTubeSync } from './YouTubeSync';
 
 export function YouTube() {
@@ -15,9 +21,13 @@ export function YouTube() {
         data: tabInformation,
         error: tabInformationError,
         isLoading: tabInformationIsLoading,
-    } = useQuery<YouTubeTabInformation>({
-        queryKey: ['tabInformation'],
-        queryFn: getYouTubeTabInfomation,
+    } = useQuery<YouTubeTabInformationValid | YouTubeTabInformationInvalid>({
+        queryKey: ['youTubeTabInformation'],
+        queryFn: async () => {
+            const currentTab = await getCurrentTab();
+
+            return getYouTubeTabInformation(currentTab.id!);
+        },
     });
 
     const { data: discordTabs, isLoading: discordTabsIsLoading } = useQuery<
@@ -36,7 +46,54 @@ export function YouTube() {
         });
 
         queryClient.invalidateQueries({
-            queryKey: ['tabInformation'],
+            queryKey: ['youTubeTabInformation'],
+        });
+    }
+
+    function handleSync(tabId: number) {
+        if (!tabInformation) {
+            return;
+        }
+
+        chrome.tabs.sendMessage(tabInformation.id, {
+            message: 'sync_start',
+            tabId,
+        });
+        chrome.tabs.sendMessage(tabId, {
+            message: 'sync_start',
+            tabId: tabInformation.id,
+        });
+
+        queryClient.invalidateQueries({
+            queryKey: ['youTubeTabInformation'],
+        });
+    }
+
+    function handleUnsync(tabId: number) {
+        if (!tabInformation) {
+            return;
+        }
+
+        // to youtube tab
+        chrome.tabs.sendMessage(tabInformation.id, {
+            message: 'sync_stop',
+            tabId,
+        });
+
+        // to discord tab
+        chrome.tabs.sendMessage(tabId, {
+            message: 'sync_stop',
+            tabId: tabInformation.id,
+        });
+
+        // to background
+        chrome.runtime.sendMessage({
+            message: 'sync_stop',
+            tabId,
+        });
+
+        queryClient.invalidateQueries({
+            queryKey: ['youTubeTabInformation'],
         });
     }
 
@@ -51,72 +108,45 @@ export function YouTube() {
         return <div />;
     }
 
+    if (!hasMetadata(tabInformation)) {
+        return <div>Go to a YouTube livestream VOD to start syncing</div>;
+    }
+
     return (
-        <YouTubeSync
-            tab={tabInformation}
-            onOptionChange={handleOptionChange}
-            discordTabs={discordTabs}
-        />
+        <div>
+            <YouTubeSync
+                tab={tabInformation}
+                onOptionChange={handleOptionChange}
+            />
+            <hr className="my-4" />
+            <SyncWithHeader />
+            <div className="font-bold flex flex-col space-y-1 -mx-4">
+                {discordTabs.length ? (
+                    discordTabs.map((discordTab) => (
+                        <DiscordItem
+                            key={discordTab.id}
+                            tab={discordTab}
+                            syncing={
+                                tabInformation.activeSyncs.includes(
+                                    discordTab.id,
+                                ) && discordTab.state === 'active'
+                            }
+                            onSync={() => handleSync(discordTab.id)}
+                            onUnsync={() => handleUnsync(discordTab.id)}
+                        />
+                    ))
+                ) : (
+                    <div className="pl-4 text-white/50">
+                        No Discord tabs open
+                    </div>
+                )}
+            </div>
+        </div>
     );
 }
 
-async function getYouTubeTabInfomation() {
-    try {
-        const currentTab = await getCurrentTab();
-
-        const response = (await chrome.tabs.sendMessage(currentTab.id!, {
-            message: 'fetch_info',
-        })) as {
-            metadata: YouTubeMetadata | null;
-            activeSyncs: number[];
-            options: YouTubeSyncOptions;
-        } | null;
-
-        if (!response) {
-            throw new Error('Failed to fetch tab information');
-        }
-
-        return { id: currentTab.id!, ...response };
-    } catch {
-        throw new Error('Failed to fetch tab information');
-    }
-}
-
-async function getDiscordTabsWithInformation() {
-    const tabs = await getDiscordTabs();
-
-    const tabsWithInfo: DiscordTab[] = tabs.map((tab) => {
-        // check if we can infer the channelName and serverName from the tab's title
-        let channelName = null;
-        let serverName = null;
-        const url = new URL(tab.url!);
-
-        // usual channel urls
-        if (/discord\.com\/channels\/\d+\/\d+/.test(url.href)) {
-            [, channelName, serverName] = tab.title!.split(' | ');
-        }
-        // direct message urls
-        else if (/discord\.com\/channels\/@me\/\d+/.test(url.href)) {
-            [, channelName] = tab.title!.split(' | ');
-        }
-
-        if (channelName) {
-            return {
-                id: tab.id!,
-                state: 'active',
-                channelName,
-                serverName,
-                error: null,
-            };
-        } else {
-            return {
-                id: tab.id!,
-                state: 'invalid',
-                channelName: null,
-                serverName,
-                error: null,
-            };
-        }
-    });
-    return tabsWithInfo.filter((tab) => tab.state !== 'invalid');
+function hasMetadata(
+    tabInformation: YouTubeTabInformationValid | YouTubeTabInformationInvalid,
+): tabInformation is YouTubeTabInformationValid {
+    return tabInformation.metadata !== null;
 }

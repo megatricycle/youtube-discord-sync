@@ -1,58 +1,30 @@
-import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { FaPause, FaPlay } from 'react-icons/fa';
-import {
-    DiscordTab,
-    YouTubeSyncOptions,
-    YouTubeTabInformation,
-} from '../types';
+import { YouTubeSyncOptions, YouTubeTabInformationValid } from '../types';
 import { ClearButton } from './ClearButton';
-import { DiscordItem } from './DiscordItem';
-import { DiscordLogo } from './DiscordLogo';
 
 type YouTubeSyncProps = {
-    tab: YouTubeTabInformation;
-    onOptionChange: (option: Partial<YouTubeSyncOptions>) => void;
-    discordTabs: DiscordTab[];
+    tab: YouTubeTabInformationValid;
+    onOptionChange?: (option: Partial<YouTubeSyncOptions>) => void;
 };
 
-export function YouTubeSync({
-    tab,
-    onOptionChange,
-    discordTabs,
-}: YouTubeSyncProps) {
-    const queryClient = useQueryClient();
-
+export function YouTubeSync({ tab, onOptionChange }: YouTubeSyncProps) {
     const [currentTimestamp, setCurrentTimestamp] = useState<Date | null>(null);
 
     function handleTogglePause() {
+        if (!onOptionChange) {
+            return;
+        }
+
         onOptionChange({ isPaused: !tab.options.isPaused });
     }
 
     function handleOffsetChange(offset: number) {
+        if (!onOptionChange) {
+            return;
+        }
+
         onOptionChange({ offset });
-    }
-
-    function handleSync(tabId: number) {
-        chrome.tabs.sendMessage(tab.id, {
-            message: 'sync_start',
-            tabId,
-        });
-
-        queryClient.invalidateQueries({
-            queryKey: ['tabInformation'],
-        });
-    }
-
-    function handleUnsync(tabId: number) {
-        chrome.tabs.sendMessage(tab.id, {
-            message: 'sync_stop',
-            tabId,
-        });
-
-        queryClient.invalidateQueries({
-            queryKey: ['tabInformation'],
-        });
     }
 
     function listenForTimestampUpdate() {
@@ -77,9 +49,7 @@ export function YouTubeSync({
 
     useEffect(listenForTimestampUpdate, [tab.id]);
 
-    if (!tab.metadata) {
-        return <div>Go to a YouTube livestream VOD to start syncing</div>;
-    }
+    const readonly = !onOptionChange;
 
     return (
         <div>
@@ -106,56 +76,40 @@ export function YouTubeSync({
                                 </div>
                             )}
                         </div>
-                        <div className="text-xl">
-                            <ClearButton onClick={handleTogglePause}>
+                        {!readonly && (
+                            <ClearButton
+                                className="text-xl"
+                                onClick={handleTogglePause}
+                            >
                                 {tab.options.isPaused ? (
                                     <FaPlay />
                                 ) : (
                                     <FaPause />
                                 )}
                             </ClearButton>
-                        </div>
+                        )}
                     </div>
                 </div>
             </div>
             <div className="mb-4">
                 <div className="flex items-center">
                     <span className="mr-2">Offset:</span>
-                    <input
-                        className="w-15 py-1 px-2 mr-2 bg-[rgba(0,0,0,0.3)]"
-                        type="number"
-                        value={tab.options.offset}
-                        onChange={(e) =>
-                            handleOffsetChange(parseInt(e.target.value))
-                        }
-                    />
-                    <span> seconds</span>
+                    {readonly ? (
+                        <span>{tab.options.offset} seconds</span>
+                    ) : (
+                        <>
+                            <input
+                                className="w-15 py-1 px-2 mr-2 bg-[rgba(0,0,0,0.3)]"
+                                type="number"
+                                value={tab.options.offset}
+                                onChange={(e) =>
+                                    handleOffsetChange(parseInt(e.target.value))
+                                }
+                            />
+                            <span> seconds</span>
+                        </>
+                    )}
                 </div>
-            </div>
-            <hr className="my-4" />
-            <div className="font-bold mb-2 flex items-center space-x-1">
-                <DiscordLogo />
-                <span>Sync with</span>
-            </div>
-            <div className="font-bold flex flex-col space-y-1 -mx-4">
-                {discordTabs.length ? (
-                    discordTabs.map((discordTab) => (
-                        <DiscordItem
-                            key={discordTab.id}
-                            tab={discordTab}
-                            syncing={
-                                tab.activeSyncs.includes(discordTab.id) &&
-                                discordTab.state === 'active'
-                            }
-                            onSync={() => handleSync(discordTab.id)}
-                            onUnsync={() => handleUnsync(discordTab.id)}
-                        />
-                    ))
-                ) : (
-                    <div className="pl-4 text-white/50">
-                        No Discord tabs open
-                    </div>
-                )}
             </div>
         </div>
     );
