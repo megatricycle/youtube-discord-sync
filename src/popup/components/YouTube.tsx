@@ -1,6 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
-    BackgroundMessage,
     DiscordMessage,
     DiscordSyncStopMessage,
     DiscordTab,
@@ -61,11 +60,11 @@ export function YouTube() {
 
         chrome.tabs.sendMessage(tabInformation.id, {
             message: 'sync_start',
-            tabId,
+            targetTabId: tabId,
         } satisfies YouTubeMessage);
         chrome.tabs.sendMessage(tabId, {
             message: 'sync_start',
-            tabId: tabInformation.id,
+            targetTabId: tabInformation.id,
         } satisfies DiscordMessage);
 
         queryClient.invalidateQueries({
@@ -81,20 +80,14 @@ export function YouTube() {
         // to youtube tab
         chrome.tabs.sendMessage(tabInformation.id, {
             message: 'sync_stop',
-            tabId,
+            targetTabId: tabId,
         } satisfies YouTubeMessage);
 
         // to discord tab
         chrome.tabs.sendMessage(tabId, {
             message: 'sync_stop',
-            tabId: tabInformation.id,
+            targetTabId: tabInformation.id,
         } satisfies DiscordSyncStopMessage);
-
-        // to background
-        chrome.runtime.sendMessage({
-            message: 'sync_stop',
-            tabId,
-        } satisfies BackgroundMessage);
 
         queryClient.invalidateQueries({
             queryKey: ['youTubeTabInformation'],

@@ -37,7 +37,7 @@ function isYouTubeMessage(request: unknown): request is YouTubeMessage {
             return true;
         case 'sync_start':
         case 'sync_stop':
-            return typeof request.tabId === 'number';
+            return typeof request.targetTabId === 'number';
         case 'sync_option_update':
             return isYouTubeSyncOptions(request.options);
         default:
@@ -77,15 +77,23 @@ async function run(): Promise<void> {
         }
 
         if (request.message === 'sync_start') {
-            const { tabId } = request;
+            const { targetTabId } = request;
 
-            syncStart(tabId);
+            syncStart(targetTabId);
+            chrome.runtime.sendMessage({
+                message: 'sync_start',
+                targetTabId,
+            } satisfies YouTubeBackgroundMessage);
         }
 
         if (request.message === 'sync_stop') {
-            const { tabId } = request;
+            const { targetTabId } = request;
 
-            syncStop(tabId);
+            syncStop(targetTabId);
+            chrome.runtime.sendMessage({
+                message: 'sync_stop',
+                targetTabId,
+            } satisfies YouTubeBackgroundMessage);
         }
 
         if (request.message === 'sync_option_update') {
@@ -191,7 +199,7 @@ async function run(): Promise<void> {
         tabsToSync.forEach((tabId) => {
             chrome.runtime.sendMessage({
                 message: 'sync_stop',
-                tabId,
+                targetTabId: tabId,
             } satisfies YouTubeBackgroundMessage);
         });
 

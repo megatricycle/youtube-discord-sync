@@ -1,158 +1,698 @@
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { chromium, type BrowserContext, type Worker } from 'playwright';
 import { afterEach, expect, test } from 'vitest';
+import {
+    cleanupExtensionTest,
+    createDiscordChannelPage,
+    createDiscordInvalidPage,
+    createRandomWebpagePage,
+    createTestExtension,
+    createYouTubePage,
+    dispatchTimeUpdate,
+    expectLatestChatVisibility,
+    getYoutubeTimestamp,
+    launchExtension,
+    openPopup,
+    setVideoDuration,
+    waitForContentScript,
+    youtubeFinishedFixture,
+    youtubeHomepageFixture,
+    youtubeMalformedFixture,
+    youtubeOngoingFixture,
+    youtubePremiereFixture,
+} from './extension-test-utils';
 
-type ExtensionChromeApi = {
-    tabs: {
-        create(properties: { url: string; active: boolean }): Promise<unknown>;
-        query(queryInfo: { url: string }): Promise<Array<{ id?: number }>>;
-        sendMessage<T>(tabId: number, message: { message: string }): Promise<T>;
-    };
-    runtime: { getURL(path: string): string };
-};
+afterEach(cleanupExtensionTest);
 
-const youtubeFixture = readFileSync(
-    new URL('../fixtures/youtube.html', import.meta.url),
-    'utf8',
-);
-const discordFixture = readFileSync(
-    new URL('../fixtures/discord.html', import.meta.url),
-    'utf8',
-);
+const CHANNELS = ['#general', '#announcements', '#memes'] as const;
+const SERVER_NAME = 'The Example Discord Server';
 
-let context: BrowserContext | undefined;
-let userDataDir: string | undefined;
+test('syncs a finished livestream to a Discord channel and shows sync information there', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
 
-afterEach(async () => {
-    await context?.close();
-    context = undefined;
+    // youtube tab information should be displayed
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
 
-    if (userDataDir) {
-        rmSync(userDataDir, { recursive: true, force: true });
-        userDataDir = undefined;
-    }
+    // sync a discord tab
+    const syncButton = popup.getByRole('button', {
+        name: new RegExp(CHANNELS[0], 'i'),
+    });
+    await syncButton.click();
+
+    // there should be a indicator that syncing has started
+    await expect
+        .poll(() => syncButton.innerText(), { timeout: 5_000 })
+        .toContain('Syncing');
+
+    // timestamp should update in the UI if an timeupdate event is dispatched
+    await dispatchTimeUpdate(youtubePage);
+    const eventTimestamp = await getYoutubeTimestamp(
+        serviceWorker,
+        youtubePage,
+    );
+
+    expect(eventTimestamp).toBe('2023-12-31T23:59:58.000Z');
+
+    // discord should display youtube tab information
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
+    await discordPopup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+
+    // discord should have auto scrolled to the latest chat per timestamp
+    await expectLatestChatVisibility(discordPage, eventTimestamp, true);
 });
 
-test('syncs a YouTube timestamp to the matching Discord chat entry', async () => {
-    const extensionPath = resolve(process.cwd(), 'dist');
-    const temporaryUserDataDir = mkdtempSync(
-        join(tmpdir(), 'youtube-discord-sync-e2e-'),
+test('syncs two of three Discord channels and scrolls only those channels', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPages = await Promise.all([
+        createDiscordChannelPage(CHANNELS[0], 456, SERVER_NAME),
+        createDiscordChannelPage(CHANNELS[1], 457, SERVER_NAME),
+        createDiscordChannelPage(CHANNELS[2], 458, SERVER_NAME),
+    ]);
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await Promise.all(
+        discordPages.map((page) =>
+            waitForContentScript(serviceWorker, page, 'get_tab_information'),
+        ),
     );
-    userDataDir = temporaryUserDataDir;
-    context = await chromium.launchPersistentContext(temporaryUserDataDir, {
-        channel: 'chromium',
-        headless: false,
-        args: [
-            `--disable-extensions-except=${extensionPath}`,
-            `--load-extension=${extensionPath}`,
-            '--no-first-run',
-        ],
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // sync the general and announcements discord channels
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup.getByText('Fixture finished livestream').waitFor();
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+        .click();
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[1], 'i') })
+        .click();
+
+    // both selected channels should show that syncing has started
+    await expect
+        .poll(() =>
+            popup
+                .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+                .innerText(),
+        )
+        .toContain('Syncing');
+    await expect
+        .poll(() =>
+            popup
+                .getByRole('button', { name: new RegExp(CHANNELS[1], 'i') })
+                .innerText(),
+        )
+        .toContain('Syncing');
+
+    // update the discord chat using the latest playback timestamp
+    await dispatchTimeUpdate(youtubePage);
+    const eventTimestamp = await getYoutubeTimestamp(
+        serviceWorker,
+        youtubePage,
+    );
+
+    // only the selected channels should show the matching chat
+    await expectLatestChatVisibility(discordPages[0], eventTimestamp, true);
+    await expectLatestChatVisibility(discordPages[1], eventTimestamp, true);
+    await expectLatestChatVisibility(discordPages[2], eventTimestamp, false);
+});
+
+test('unsyncs a Discord channel and returns its popup to the sync selector', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // start syncing with the general discord channel
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    const syncButton = popup.getByRole('button', {
+        name: new RegExp(CHANNELS[0], 'i'),
+    });
+    await syncButton.click();
+
+    // advance playback and capture its timestamp
+    await dispatchTimeUpdate(youtubePage);
+    let eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
+
+    // the matching chat should be visible in the channel
+    await expectLatestChatVisibility(discordPage, eventTimestamp, true);
+
+    // unsync the general channel
+    await syncButton.click();
+
+    // the channel should no longer show an active sync
+    await expect.poll(() => syncButton.innerText()).not.toContain('Syncing');
+
+    // advance playback after unsyncing
+    await dispatchTimeUpdate(youtubePage);
+    eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
+
+    // the unsynced channel should no longer follow playback
+    await expectLatestChatVisibility(discordPage, eventTimestamp, false);
+
+    // open the discord popup after unsyncing
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
+
+    // the popup should show its selector, not YouTube sync information
+    await discordPopup.getByText('Sync with').waitFor({ state: 'visible' });
+    await expect
+        .poll(() =>
+            discordPopup.getByText('Fixture finished livestream').count(),
+        )
+        .toBe(0);
+});
+
+test('unsyncs only one of two Discord channels', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPages = await Promise.all([
+        createDiscordChannelPage(CHANNELS[0], 456, SERVER_NAME),
+        createDiscordChannelPage(CHANNELS[1], 457, SERVER_NAME),
+    ]);
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await Promise.all(
+        discordPages.map((page) =>
+            waitForContentScript(serviceWorker, page, 'get_tab_information'),
+        ),
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // start syncing with the general and announcements channels
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    const generalButton = popup.getByRole('button', {
+        name: new RegExp(CHANNELS[0], 'i'),
+    });
+    const announcementsButton = popup.getByRole('button', {
+        name: new RegExp(CHANNELS[1], 'i'),
+    });
+    await generalButton.click();
+    await announcementsButton.click();
+
+    // send the first playback update
+    await dispatchTimeUpdate(youtubePage);
+    const firstEventTimestamp = await getYoutubeTimestamp(
+        serviceWorker,
+        youtubePage,
+    );
+
+    // both channels should show the matching chat
+    await expectLatestChatVisibility(
+        discordPages[0],
+        firstEventTimestamp,
+        true,
+    );
+    await expectLatestChatVisibility(
+        discordPages[1],
+        firstEventTimestamp,
+        true,
+    );
+
+    // unsync the general channel while leaving announcements active
+    await generalButton.click();
+
+    // only announcements should remain marked as syncing
+    await expect.poll(() => generalButton.innerText()).not.toContain('Syncing');
+    await expect
+        .poll(() => announcementsButton.innerText())
+        .toContain('Syncing');
+
+    // send another playback update
+    await dispatchTimeUpdate(youtubePage);
+    const secondEventTimestamp = await getYoutubeTimestamp(
+        serviceWorker,
+        youtubePage,
+    );
+
+    // announcements should follow playback while general stays unchanged
+    await expectLatestChatVisibility(
+        discordPages[0],
+        secondEventTimestamp,
+        false,
+    );
+    await expectLatestChatVisibility(
+        discordPages[1],
+        secondEventTimestamp,
+        true,
+    );
+});
+
+test('pausing stops further Discord scrolling', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // start syncing with the general channel
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    const syncButton = popup.getByRole('button', {
+        name: new RegExp(CHANNELS[0], 'i'),
+    });
+    await syncButton.click();
+
+    // advance playback once while syncing
+    await dispatchTimeUpdate(youtubePage);
+    let eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
+
+    // confirm the matching chat is visible
+    await expectLatestChatVisibility(discordPage, eventTimestamp, true);
+
+    // pause playback and send an update
+    await popup.locator('button:has(svg)').click();
+    await popup.waitForTimeout(100);
+    await dispatchTimeUpdate(youtubePage);
+    eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
+
+    // confirm the chat does not advance while paused
+    await expectLatestChatVisibility(discordPage, eventTimestamp, false);
+
+    // resume playback and send another update
+    await popup.locator('button:has(svg)').click();
+    await popup.waitForTimeout(100);
+    await dispatchTimeUpdate(youtubePage);
+    eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
+
+    // confirm the timestamp advanced and the next chat is visible
+    expect(eventTimestamp).toBe('2024-01-01T00:00:00.000Z');
+    await expectLatestChatVisibility(discordPage, eventTimestamp, true);
+});
+
+test('removing the YouTube video source stops its Discord sync', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // start syncing the Discord channel
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup.getByText('Fixture finished livestream').waitFor({
+        state: 'visible',
+    });
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+        .click();
+
+    // confirm the channel has started syncing
+    await expect
+        .poll(() =>
+            popup
+                .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+                .innerText(),
+        )
+        .toContain('Syncing');
+
+    // remove the YouTube source to trigger sync cleanup
+    await youtubePage.locator('.video-stream').evaluate((video) => {
+        video.setAttribute('src', 'fixture-source');
+        video.removeAttribute('src');
     });
 
-    let serviceWorker: Worker | undefined = context.serviceWorkers()[0];
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
 
-    if (!serviceWorker) {
-        serviceWorker = await context.waitForEvent('serviceworker');
-    }
+    // verify the Discord tab no longer reports a YouTube sync
+    await discordPopup.getByText('Sync with').waitFor({ state: 'visible' });
+    await expect
+        .poll(() =>
+            discordPopup.getByText('Fixture finished livestream').count(),
+        )
+        .toBe(0);
+});
 
-    expect(serviceWorker.url()).toMatch(/^chrome-extension:\/\//);
-
-    const discordPage = await context.newPage();
-    await discordPage.route('https://discord.com/**', (route) =>
-        route.fulfill({
-            status: 200,
-            contentType: 'text/html',
-            body: discordFixture,
-        }),
+test('closing the YouTube source tab stops its Discord sync', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
     );
-    await discordPage.goto('https://discord.com/channels/123/456');
-
-    const youtubePage = await context.newPage();
-    await youtubePage.route('https://www.youtube.com/**', (route) =>
-        route.fulfill({
-            status: 200,
-            contentType: 'text/html',
-            body: youtubeFixture,
-        }),
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
     );
-    await youtubePage.goto('https://www.youtube.com/watch?v=fixture-video');
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // start syncing the Discord channel
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup.getByText('Fixture finished livestream').waitFor({
+        state: 'visible',
+    });
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+        .click();
+
+    // confirm the channel has started syncing
+    await expect
+        .poll(() =>
+            popup
+                .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+                .innerText(),
+        )
+        .toContain('Syncing');
+
+    // close the YouTube source and reopen the Discord popup
+    await youtubePage.close();
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
+
+    // verify the Discord tab no longer reports a YouTube sync
+    await discordPopup.getByText('Sync with').waitFor({ state: 'visible' });
+    await expect
+        .poll(() =>
+            discordPopup.getByText('Fixture finished livestream').count(),
+        )
+        .toBe(0);
+});
+
+test('navigating the YouTube source tab stops its Discord sync', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // start syncing the Discord channel
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+        .click();
+
+    // confirm the channel has started syncing
+    await expect
+        .poll(() =>
+            popup
+                .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+                .innerText(),
+        )
+        .toContain('Syncing');
+
+    // navigate the source tab and reopen the Discord popup
+    await youtubePage.goto(
+        'https://www.youtube.com/watch?v=next-fixture-video',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
+
+    // verify the previous YouTube sync has ended
+    await discordPopup.getByText('Sync with').waitFor({ state: 'visible' });
+    await expect
+        .poll(() =>
+            discordPopup.getByText('Fixture finished livestream').count(),
+        )
+        .toBe(0);
+});
+
+test('changing the offset updates the displayed timestamp in both popups', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // change the offset in the YouTube popup
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup.getByText('Fixture finished livestream').waitFor();
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+        .click();
+    const timestampDisplay = popup.locator('div.text-xs').last();
+    const originalTimestamp = await timestampDisplay.innerText();
+
+    const offsetInput = popup.getByRole('spinbutton');
+    await offsetInput.fill('5');
+
+    // verify the new offset and timestamp in YouTube
+    await expect.poll(() => offsetInput.inputValue()).toBe('5');
+    await expect
+        .poll(() => timestampDisplay.innerText())
+        .not.toBe(originalTimestamp);
+
+    // open the Discord popup to check its sync details
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
+
+    // verify Discord displays the updated offset and timestamp
+    await discordPopup.getByText('Offset:').waitFor({ state: 'visible' });
+    await discordPopup.getByText('5 seconds').waitFor({ state: 'visible' });
+    await expect
+        .poll(() => discordPopup.locator('div.text-xs').last().innerText())
+        .not.toBe(originalTimestamp);
+});
+
+test('computes a premiere timestamp from its duration', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    const youtubePage = await createYouTubePage(youtubePremiereFixture);
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+    await setVideoDuration(serviceWorker, youtubePage, 1800);
+
+    // start syncing the premiere to Discord
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup.getByText('Fixture premiere').waitFor({ state: 'visible' });
+    await popup
+        .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
+        .click();
+
+    // dispatch one second of playback
+    await dispatchTimeUpdate(youtubePage);
+    const eventTimestamp = await getYoutubeTimestamp(
+        serviceWorker,
+        youtubePage,
+    );
+
+    // verify the premiere timestamp and matching chat visibility
+    expect(eventTimestamp).toBe('2024-01-01T00:29:58.000Z');
+    await expectLatestChatVisibility(discordPage, eventTimestamp, true);
+});
+
+test('shows no Discord tabs when none are open', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+    // open the YouTube popup with no Discord tabs
     await youtubePage.bringToFront();
 
-    const popupPromise = context.waitForEvent('page');
-    await serviceWorker.evaluate(async () => {
-        const extensionChrome = globalThis as typeof globalThis & {
-            chrome: ExtensionChromeApi;
-        };
+    const popup = await openPopup(serviceWorker);
 
-        await extensionChrome.chrome.tabs.create({
-            url: extensionChrome.chrome.runtime.getURL('popup/index.html'),
-            active: false,
-        });
-    });
-    const popup = await popupPromise;
-    await popup.getByText('Fixture video').waitFor({ state: 'visible' });
+    // show the empty Discord-tab state
+    await popup.getByText('No Discord tabs open').waitFor({ state: 'visible' });
+});
 
-    const discordSyncButton = popup.getByRole('button', { name: /general/ });
-    await discordSyncButton.click();
-    await expect.poll(() => discordSyncButton.innerText()).toContain('Syncing');
+test('ignores Discord tabs that are not on a channel page', async () => {
+    const serviceWorker = await launchExtension();
+    const invalidPage = await createDiscordInvalidPage();
+    const invalidTitle = await invalidPage.title();
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
 
+    // open the YouTube popup with only an invalid Discord tab
+    await youtubePage.bringToFront();
+
+    const popup = await openPopup(serviceWorker);
+
+    // ignore the invalid tab and show the empty state
+    expect(invalidTitle).toBe('Discord | Not a channel');
+    await popup.getByText('No Discord tabs open').waitFor({ state: 'visible' });
+});
+
+test('an ongoing livestream shows the VOD guidance', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(youtubeOngoingFixture);
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // open the popup on the ongoing livestream
+    await youtubePage.bringToFront();
+
+    const popup = await openPopup(serviceWorker);
+
+    // direct the user to a finished livestream VOD
+    await popup
+        .getByText('Go to a YouTube livestream VOD to start syncing')
+        .waitFor({ state: 'visible' });
+});
+
+test('a YouTube homepage shows the VOD guidance', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(
+        youtubeHomepageFixture,
+        'https://www.youtube.com/',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // open the popup on the YouTube homepage
+    await youtubePage.bringToFront();
+
+    const popup = await openPopup(serviceWorker);
+
+    // direct the user to a finished livestream VOD
+    await popup
+        .getByText('Go to a YouTube livestream VOD to start syncing')
+        .waitFor({ state: 'visible' });
+});
+
+test('opening the popup on Discord shows the sync option selector', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+
+    // open the popup on a Discord channel
+    await discordPage.bringToFront();
+
+    const popup = await openPopup(serviceWorker);
+
+    // show the available sync options
+    await popup.getByText('Sync with').waitFor({ state: 'visible' });
+
+    // select YouTube as the sync source
+    await popup.getByRole('button', { name: /youtube/i }).click();
+
+    // prompt the user to open a YouTube livestream VOD
     await expect
         .poll(() =>
-            serviceWorker.evaluate(async () => {
-                const extensionChrome = globalThis as typeof globalThis & {
-                    chrome: ExtensionChromeApi;
-                };
-                const discordTab = (
-                    await extensionChrome.chrome.tabs.query({
-                        url: 'https://discord.com/*',
-                    })
-                )[0];
-
-                if (!discordTab?.id) {
-                    return false;
-                }
-
-                const information =
-                    await extensionChrome.chrome.tabs.sendMessage<{
-                        currentSync: unknown;
-                    }>(discordTab.id, { message: 'get_tab_information' });
-
-                return information?.currentSync !== null;
-            }),
+            popup
+                .getByText(
+                    'To start, open this extension in a YouTube livestream VOD tab.',
+                )
+                .count(),
         )
-        .toBe(true);
+        .toBeGreaterThan(0);
+});
 
-    const youtubeTimestamp = await serviceWorker.evaluate(async () => {
-        const extensionChrome = globalThis as typeof globalThis & {
-            chrome: ExtensionChromeApi;
-        };
-        const youtubeTab = (
-            await extensionChrome.chrome.tabs.query({
-                url: 'https://www.youtube.com/*',
-            })
-        )[0];
-
-        if (!youtubeTab?.id) {
-            throw new Error('YouTube fixture tab not found');
-        }
-
-        const response = await extensionChrome.chrome.tabs.sendMessage<{
-            timestamp: string | null;
-        }>(youtubeTab.id, { message: 'fetch_timestamp' });
-
-        return response.timestamp;
+test('opening the popup on another website shows Welcome', async () => {
+    const serviceWorker = await launchExtension();
+    const page = await createRandomWebpagePage();
+    await page.getByText('This is a random webpage').waitFor({
+        state: 'visible',
     });
-    expect(youtubeTimestamp).toBe('2023-12-31T23:59:57.000Z');
 
-    await youtubePage.locator('.video-stream').dispatchEvent('timeupdate');
+    // open the popup on an unrelated website
+    await page.bringToFront();
 
-    await expect
-        .poll(() =>
-            discordPage
-                .locator('main div[class*="scroller"]')
-                .evaluate((element) => (element as HTMLElement).scrollTop),
-        )
-        .toBe(82);
+    const popup = await openPopup(serviceWorker);
+
+    // show the welcome message
+    await popup.getByText(/Welcome!/).waitFor({ state: 'visible' });
+});
+
+test('shows an error when fetching YouTube information fails', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(youtubeMalformedFixture);
+
+    // open the popup with malformed YouTube metadata
+    await youtubePage.bringToFront();
+
+    const popup = await openPopup(serviceWorker);
+
+    // show the information-fetch error
+    await popup
+        .getByText('Something went wrong. Please refresh the page.')
+        .waitFor({ state: 'visible' });
+});
+
+test('shows an error when fetching Discord tab information fails', async () => {
+    const extensionPath = await createTestExtension({
+        omitDiscordContentScript: true,
+    });
+    const serviceWorker = await launchExtension(extensionPath);
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+
+    // open the popup without a Discord content-script listener
+    await discordPage.bringToFront();
+
+    const popup = await openPopup(serviceWorker);
+
+    // show the information-fetch error
+    await popup
+        .getByText('Something went wrong. Please refresh the page.')
+        .waitFor({ state: 'visible' });
 });

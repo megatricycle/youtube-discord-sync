@@ -21,8 +21,8 @@ function isDiscordMessage(request: unknown): request is DiscordMessage {
         case 'video_timeupdate':
             return typeof request.timestamp === 'string';
         case 'sync_start':
-            return typeof request.tabId === 'number';
         case 'sync_stop':
+            return typeof request.targetTabId === 'number';
         case 'get_tab_information':
             return true;
         default:
@@ -59,7 +59,7 @@ function handleMessage(
 
             return (
                 dateTime !== null &&
-                new Date(dateTime) < new Date(request.timestamp)
+                new Date(dateTime) <= new Date(request.timestamp)
             );
         });
 
@@ -91,7 +91,7 @@ function handleMessage(
     }
 
     if (request.message === 'sync_start') {
-        syncStart(request.tabId);
+        syncStart(request.targetTabId);
     }
 
     if (request.message === 'sync_stop') {

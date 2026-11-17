@@ -38,26 +38,29 @@ export type YouTubeTabInformationInvalid = Omit<
 
 export type BackgroundMessage =
     | { message: 'video_timeupdate'; tabId: number; timestamp: string }
-    | { message: 'sync_stop'; tabId: number }
+    | { message: 'sync_start' | 'sync_stop'; targetTabId: number }
     | { message: 'popup_opened'; tabId: number };
 
 export type YouTubeBackgroundMessage =
     | { message: 'video_timeupdate'; tabId: number; timestamp: string | null }
-    | { message: 'sync_stop'; tabId: number };
+    | { message: 'sync_start' | 'sync_stop'; targetTabId: number };
 
 export type YouTubeMessage =
     | { message: 'fetch_info' }
-    | { message: 'sync_start'; tabId: number }
-    | { message: 'sync_stop'; tabId: number }
+    | { message: 'sync_start'; targetTabId: number }
+    | { message: 'sync_stop'; targetTabId: number }
     | { message: 'sync_option_update'; options: Partial<YouTubeSyncOptions> }
     | { message: 'fetch_timestamp' };
 
-export type DiscordSyncStopMessage = { message: 'sync_stop'; tabId: number };
+export type DiscordSyncStopMessage = {
+    message: 'sync_stop';
+    targetTabId: number;
+};
 
 export type DiscordMessage =
     | { message: 'video_timeupdate'; timestamp: string }
-    | { message: 'sync_start'; tabId: number }
-    | { message: 'sync_stop'; tabId: number }
+    | { message: 'sync_start'; targetTabId: number }
+    | { message: 'sync_stop'; targetTabId: number }
     | { message: 'get_tab_information' };
 
 export type CurrentSync = { type: 'youtube'; tabId: number } | null;
