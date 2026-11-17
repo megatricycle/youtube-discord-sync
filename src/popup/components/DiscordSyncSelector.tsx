@@ -1,25 +1,13 @@
 import { useState } from 'react';
-import { IconType } from 'react-icons';
-import { FaYoutube } from 'react-icons/fa';
-import { SyncOption } from '../../types';
+import type { SyncOption } from '../../types';
+import { SOURCE_DESCRIPTORS } from '../utils/sources';
 import { DiscordYouTubeSyncPage } from './DiscordYouTubeSyncPage';
 import { SyncItem } from './SyncItem';
 import { SyncWithHeader } from './SyncWithHeader';
 
-type SyncOptionItem = {
-    id: SyncOption;
-    label: string;
-    icon: IconType;
-    disabled?: boolean;
-};
-
-const options: SyncOptionItem[] = [
-    {
-        id: 'youtube',
-        label: 'YouTube',
-        icon: FaYoutube,
-    },
-];
+const sourceOptions = (
+    Object.keys(SOURCE_DESCRIPTORS) as Array<keyof typeof SOURCE_DESCRIPTORS>
+).map((id) => ({ id, ...SOURCE_DESCRIPTORS[id] }));
 
 export function DiscordSyncSelector() {
     const [selectedOption, setSelectedOption] = useState<SyncOption | null>(
@@ -51,7 +39,7 @@ export function DiscordSyncSelector() {
         <div>
             <SyncWithHeader />
             <ul className="grid grid-cols-3 gap-1 m-auto">
-                {options.map((option) => (
+                {sourceOptions.map((option) => (
                     <li
                         key={option.id}
                         className="flex justify-center items-center"
@@ -60,7 +48,6 @@ export function DiscordSyncSelector() {
                             icon={option.icon}
                             label={option.label}
                             onClick={() => handleOptionChange(option.id)}
-                            disabled={option.disabled}
                         />
                     </li>
                 ))}

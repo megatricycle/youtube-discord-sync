@@ -1,21 +1,27 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
-    DiscordMessage,
-    DiscordSyncStopMessage,
     DiscordTab,
-    YouTubeMessage,
-    YouTubeSyncOptions,
+    SyncOptions,
     YouTubeTabInformationInvalid,
     YouTubeTabInformationValid,
 } from '../../types';
 import {
     getCurrentTab,
-    getDiscordTabsWithInformation,
-    getYouTubeTabInformation,
+    getDiscordTabs,
+    getSourceTabInformation,
+    startSync,
+    stopSync,
+    updateSyncOptions,
 } from '../utils/chrome';
 import { DiscordItem } from './DiscordItem';
 import { SyncWithHeader } from './SyncWithHeader';
 import { YouTubeSync } from './YouTubeSync';
+
+/**
+ * A couple of quick retries absorb the window where the popup opens before a
+ * content script has registered, without delaying the error screen much.
+ */
+const RETRY = { retry: 2, retryDelay: 250 } as const;
 
 export function YouTube() {
     const queryClient = useQueryClient();
@@ -29,28 +35,32 @@ export function YouTube() {
         queryFn: async () => {
             const currentTab = await getCurrentTab();
 
-            return getYouTubeTabInformation(currentTab.id!);
+            return getSourceTabInformation(currentTab.id!);
         },
+        ...RETRY,
     });
 
     const { data: discordTabs, isLoading: discordTabsIsLoading } = useQuery<
         DiscordTab[]
     >({
         queryKey: ['discordTabs'],
-        queryFn: getDiscordTabsWithInformation,
+        queryFn: getDiscordTabs,
+        ...RETRY,
     });
 
-    function handleOptionChange(options: Partial<YouTubeSyncOptions>) {
-        if (!tabInformation) return;
-
-        chrome.tabs.sendMessage(tabInformation.id, {
-            message: 'sync_option_update',
-            options,
-        } satisfies YouTubeMessage);
-
+    function refresh() {
         queryClient.invalidateQueries({
             queryKey: ['youTubeTabInformation'],
         });
+        queryClient.invalidateQueries({ queryKey: ['playbackTimestamp'] });
+    }
+
+    function handleOptionChange(options: Partial<SyncOptions>) {
+        if (!tabInformation) {
+            return;
+        }
+
+        void updateSyncOptions(tabInformation.id, options).then(refresh);
     }
 
     function handleSync(tabId: number) {
@@ -58,18 +68,7 @@ export function YouTube() {
             return;
         }
 
-        chrome.tabs.sendMessage(tabInformation.id, {
-            message: 'sync_start',
-            targetTabId: tabId,
-        } satisfies YouTubeMessage);
-        chrome.tabs.sendMessage(tabId, {
-            message: 'sync_start',
-            targetTabId: tabInformation.id,
-        } satisfies DiscordMessage);
-
-        queryClient.invalidateQueries({
-            queryKey: ['youTubeTabInformation'],
-        });
+        void startSync(tabInformation.id, tabId).then(refresh);
     }
 
     function handleUnsync(tabId: number) {
@@ -77,25 +76,13 @@ export function YouTube() {
             return;
         }
 
-        // to youtube tab
-        chrome.tabs.sendMessage(tabInformation.id, {
-            message: 'sync_stop',
-            targetTabId: tabId,
-        } satisfies YouTubeMessage);
-
-        // to discord tab
-        chrome.tabs.sendMessage(tabId, {
-            message: 'sync_stop',
-            targetTabId: tabInformation.id,
-        } satisfies DiscordSyncStopMessage);
-
-        queryClient.invalidateQueries({
-            queryKey: ['youTubeTabInformation'],
-        });
+        void stopSync(tabInformation.id, tabId).then(refresh);
     }
 
     if (tabInformationError) {
         // @TODO:
+        console.error(tabInformationError);
+
         return <div>Something went wrong. Please refresh the page.</div>;
     }
 
@@ -103,6 +90,10 @@ export function YouTube() {
 
     if (isLoading || !tabInformation || !discordTabs) {
         return <div />;
+    }
+
+    if (tabInformation.status === 'error') {
+        return <div>Something went wrong. Please refresh the page.</div>;
     }
 
     if (!hasMetadata(tabInformation)) {
@@ -124,9 +115,9 @@ export function YouTube() {
                             key={discordTab.id}
                             tab={discordTab}
                             syncing={
-                                tabInformation.activeSyncs.includes(
+                                tabInformation.syncingDiscordTabIds.includes(
                                     discordTab.id,
-                                ) && discordTab.state === 'active'
+                                ) && discordTab.status === 'active'
                             }
                             onSync={() => handleSync(discordTab.id)}
                             onUnsync={() => handleUnsync(discordTab.id)}

@@ -9,13 +9,15 @@ export function Discord() {
         data: tabInformation,
         error: tabInformationError,
         isLoading: tabInformationIsLoading,
-    } = useQuery<DiscordTabInformation | null>({
+    } = useQuery<DiscordTabInformation>({
         queryKey: ['discordTabInformation'],
         queryFn: async () => {
             const currentTab = await getCurrentTab();
 
             return getDiscordTabInformation(currentTab.id!);
         },
+        retry: 2,
+        retryDelay: 250,
     });
 
     if (tabInformationError) {

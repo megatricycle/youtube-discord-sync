@@ -1,121 +1,174 @@
 import type {
-    CurrentSync,
-    DiscordMessage,
-    DiscordTabInformationResponse,
+    ContentMessage,
+    DiscordContentMessage,
+    DiscordTabReport,
+    TabStatus,
 } from '../types';
-
-// as of now any incoming sync requests are assumed to be from a YouTube tab
-// this can change in the future once we start supporting other websites
-// @TODO: change these to make it clear that these come from a YouTube tab
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
-function isDiscordMessage(request: unknown): request is DiscordMessage {
-    if (!isRecord(request)) {
-        return false;
-    }
-
-    switch (request.message) {
-        case 'video_timeupdate':
-            return typeof request.timestamp === 'string';
-        case 'sync_start':
-        case 'sync_stop':
-            return typeof request.targetTabId === 'number';
-        case 'get_tab_information':
-            return true;
-        default:
-            return false;
-    }
+function isDiscordContentMessage(
+    request: unknown,
+): request is DiscordContentMessage {
+    return (
+        isRecord(request) &&
+        request.type === 'video_timeupdate' &&
+        typeof request.timestamp === 'string'
+    );
 }
 
-let currentSync: CurrentSync = null;
+/**
+ * Derives the channel identity from the tab's own URL and title. Discord titles
+ * look like `(1) Discord | #general | My Server`, so the unread badge has to be
+ * ignored.
+ */
+function deriveIdentity(
+    href: string,
+    title: string,
+): { channelName: string | null; serverName: string | null } {
+    let pathname: string;
 
-function handleMessage(
-    request: unknown,
-    sendResponse: (response?: unknown) => void,
-) {
-    if (!isDiscordMessage(request)) {
+    try {
+        pathname = new URL(href).pathname;
+    } catch {
+        return { channelName: null, serverName: null };
+    }
+
+    const match = pathname.match(/^\/channels\/([^/]+)\/(\d+)/);
+
+    if (!match) {
+        return { channelName: null, serverName: null };
+    }
+
+    const [, guildId] = match;
+    const segments = title.split(' | ');
+    const channelName = segments[1] ?? null;
+
+    // Direct messages have no server segment.
+    if (guildId === '@me') {
+        return { channelName, serverName: null };
+    }
+
+    if (!/^\d+$/.test(guildId)) {
+        return { channelName: null, serverName: null };
+    }
+
+    return { channelName, serverName: segments[2] ?? null };
+}
+
+function scrollToTimestamp(timestamp: string): void {
+    const scroller = document.querySelector<HTMLElement>(
+        "main div[class*='scroller']",
+    );
+
+    if (!scroller) {
+        console.warn('Chat scroller not found');
+
         return;
     }
 
-    if (request.message === 'video_timeupdate') {
-        const scroller = document.querySelector<HTMLElement>(
-            "main div[class*='scroller']",
-        );
+    const chatElements = Array.from(
+        document.querySelectorAll<HTMLTimeElement>(
+            `main div[class*='scroller'] time[datetime]`,
+        ),
+    ).filter((chatElement) => {
+        const dateTime = chatElement.getAttribute('datetime');
 
-        if (!scroller) {
-            console.warn('Chat scroller not found');
-            return;
-        }
+        return dateTime !== null && new Date(dateTime) <= new Date(timestamp);
+    });
 
-        const chatElements = Array.from(
-            document.querySelectorAll<HTMLTimeElement>(
-                `main div[class*='scroller'] time[datetime]`,
-            ),
-        ).filter((chatElement) => {
-            const dateTime = chatElement.getAttribute('datetime');
+    const closestTimeElement = chatElements[chatElements.length - 1];
 
-            return (
-                dateTime !== null &&
-                new Date(dateTime) <= new Date(request.timestamp)
-            );
+    if (!closestTimeElement) {
+        scroller.scrollBy({
+            behavior: 'instant',
+            top: -scroller.clientHeight,
         });
 
-        const closestTimeElement = chatElements[chatElements.length - 1];
+        return;
+    }
 
-        if (!closestTimeElement) {
-            scroller.scrollBy({
-                behavior: 'instant',
-                top: -scroller.clientHeight,
-            });
+    const currentChatElement = closestTimeElement.closest('li');
 
+    if (!currentChatElement) {
+        return;
+    }
+
+    const distance =
+        48 +
+        scroller.clientHeight -
+        currentChatElement.getBoundingClientRect().top -
+        currentChatElement.clientHeight;
+    const y = -distance + 30;
+
+    scroller.scrollBy({ behavior: 'instant', top: y });
+}
+
+function run(): void {
+    let lastReport: string | null = null;
+
+    function report(): void {
+        const identity = deriveIdentity(location.href, document.title);
+        const status: TabStatus = identity.channelName ? 'active' : 'invalid';
+        const tabReport: DiscordTabReport = {
+            url: location.href,
+            status,
+            error: null,
+            ...identity,
+        };
+        const serialized = JSON.stringify(tabReport);
+
+        // Unread badges mutate the title constantly; only report real changes.
+        if (serialized === lastReport) {
             return;
         }
 
-        const currentChatElement = closestTimeElement.closest('li');
+        lastReport = serialized;
 
-        if (!currentChatElement) {
-            return;
+        void chrome.runtime
+            .sendMessage({
+                type: 'update_discord_tab',
+                report: tabReport,
+            } satisfies ContentMessage)
+            .catch(() => undefined);
+    }
+
+    report();
+
+    chrome.runtime.onMessage.addListener((request) => {
+        if (!isDiscordContentMessage(request)) {
+            return false;
         }
 
-        const distance =
-            48 +
-            scroller.clientHeight -
-            currentChatElement.getBoundingClientRect().top -
-            currentChatElement.clientHeight;
-        const y = -distance + 30;
+        scrollToTimestamp(request.timestamp);
 
-        scroller.scrollBy({ behavior: 'instant', top: y });
-    }
+        return false;
+    });
 
-    if (request.message === 'sync_start') {
-        syncStart(request.targetTabId);
-    }
+    new MutationObserver(report).observe(document.head, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+    });
 
-    if (request.message === 'sync_stop') {
-        syncStop();
-    }
+    // Discord is a single-page app, so the URL can change without the title
+    // changing and without a navigation event.
+    document.addEventListener('visibilitychange', report);
 
-    if (request.message === 'get_tab_information') {
-        sendResponse({ currentSync } satisfies DiscordTabInformationResponse);
-    }
+    window.addEventListener('pagehide', () => {
+        void chrome.runtime
+            .sendMessage({ type: 'unregister_tab' } satisfies ContentMessage)
+            .catch(() => undefined);
+    });
+
+    window.addEventListener('pageshow', (event) => {
+        if (event.persisted) {
+            lastReport = null;
+            report();
+        }
+    });
 }
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    handleMessage(request, sendResponse);
-
-    return true;
-});
-
-function syncStart(tabId: number) {
-    currentSync = {
-        type: 'youtube',
-        tabId,
-    };
-}
-
-function syncStop() {
-    currentSync = null;
-}
+run();

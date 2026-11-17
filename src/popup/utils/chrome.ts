@@ -1,11 +1,12 @@
 import type {
-    DiscordMessage,
     DiscordTab,
     DiscordTabInformation,
-    DiscordTabInformationResponse,
-    YouTubeMessage,
+    PlaybackTimestampResponse,
+    PopupRequest,
+    SourceTabInformation,
+    SyncOptions,
+    TabContext,
     YouTubeTabInformationInvalid,
-    YouTubeTabInformationResponse,
     YouTubeTabInformationValid,
 } from '../../types';
 
@@ -13,93 +14,96 @@ export async function getCurrentTab() {
     return (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
 }
 
-export async function getYouTubeTabInformation(
+/**
+ * The background is the only messaging endpoint: the popup never talks to a
+ * content script directly.
+ */
+async function sendRequest<T>(request: PopupRequest): Promise<T | null> {
+    const response = await chrome.runtime.sendMessage(request);
+
+    return (response ?? null) as T | null;
+}
+
+export async function getTabContext(
+    tabId: NonNullable<chrome.tabs.Tab['id']>,
+): Promise<TabContext> {
+    const context = await sendRequest<TabContext>({
+        type: 'get_tab_context',
+        tabId,
+    });
+
+    return context ?? { type: 'other' };
+}
+
+/**
+ * Throws when the tab is not registered, i.e. the extension cannot reach its
+ * content script. Returning `null` instead would render an empty popup that
+ * never explains itself.
+ */
+export async function getSourceTabInformation(
     tabId: NonNullable<chrome.tabs.Tab['id']>,
 ): Promise<YouTubeTabInformationValid | YouTubeTabInformationInvalid> {
-    const response: YouTubeTabInformationResponse | null =
-        await chrome.tabs.sendMessage(tabId, {
-            message: 'fetch_info',
-        } satisfies YouTubeMessage);
+    const tabInformation = await sendRequest<SourceTabInformation>({
+        type: 'get_source_tab_information',
+        tabId,
+    });
 
-    if (!response) {
+    if (!tabInformation) {
         throw new Error('Failed to fetch tab information');
     }
 
-    return { id: tabId, ...response };
+    return tabInformation;
 }
 
-export async function getDiscordTabs() {
-    return await chrome.tabs.query({
-        url: 'https://discord.com/*',
-    });
-}
+export async function getDiscordTabs(): Promise<DiscordTab[]> {
+    const tabs = await sendRequest<DiscordTab[]>({ type: 'get_discord_tabs' });
 
-export async function getDiscordTabsWithInformation() {
-    const tabs = await getDiscordTabs();
-
-    const tabsWithInfo: DiscordTab[] = tabs.map((tab) => {
-        // check if we can infer the channelName and serverName from the tab's title
-        let channelName = null;
-        let serverName = null;
-        const url = new URL(tab.url!);
-
-        // usual channel urls
-        if (/discord\.com\/channels\/\d+\/\d+/.test(url.href)) {
-            [, channelName, serverName] = tab.title!.split(' | ');
-        }
-        // direct message urls
-        else if (/discord\.com\/channels\/@me\/\d+/.test(url.href)) {
-            [, channelName] = tab.title!.split(' | ');
-        }
-
-        if (channelName) {
-            return {
-                id: tab.id!,
-                state: 'active',
-                channelName,
-                serverName,
-                error: null,
-            };
-        } else {
-            return {
-                id: tab.id!,
-                state: 'invalid',
-                channelName: null,
-                serverName,
-                error: null,
-            };
-        }
-    });
-    return tabsWithInfo.filter((tab) => tab.state !== 'invalid');
+    return tabs ?? [];
 }
 
 export async function getDiscordTabInformation(
     tabId: NonNullable<chrome.tabs.Tab['id']>,
 ): Promise<DiscordTabInformation> {
-    const response: DiscordTabInformationResponse =
-        await chrome.tabs.sendMessage(tabId, {
-            message: 'get_tab_information',
-        } satisfies DiscordMessage);
+    const tabInformation = await sendRequest<DiscordTabInformation>({
+        type: 'get_discord_tab_information',
+        tabId,
+    });
 
-    if (!response) {
+    if (!tabInformation) {
         throw new Error('Failed to fetch tab information');
     }
 
-    if (!response.currentSync) {
-        return {
-            id: tabId,
-            currentSync: response.currentSync,
-        };
-    }
+    return tabInformation;
+}
 
-    // get tab information from youtube too
-    const tabInformation = await getYouTubeTabInformation(
-        response.currentSync.tabId,
-    );
+export async function getPlaybackTimestamp(
+    tabId: NonNullable<chrome.tabs.Tab['id']>,
+): Promise<string | null> {
+    const response = await sendRequest<PlaybackTimestampResponse>({
+        type: 'get_playback_timestamp',
+        tabId,
+    });
 
-    if (!tabInformation.metadata) {
-        throw new Error('A YouTube syncing tab has no metadata');
-    }
+    return response?.timestamp ?? null;
+}
 
-    return { id: tabId, currentSync: { type: 'youtube', tabInformation } };
+export function startSync(
+    sourceTabId: number,
+    discordTabId: number,
+): Promise<unknown> {
+    return sendRequest({ type: 'start_sync', sourceTabId, discordTabId });
+}
+
+export function stopSync(
+    sourceTabId: number,
+    discordTabId: number,
+): Promise<unknown> {
+    return sendRequest({ type: 'stop_sync', sourceTabId, discordTabId });
+}
+
+export function updateSyncOptions(
+    sourceTabId: number,
+    options: Partial<SyncOptions>,
+): Promise<PlaybackTimestampResponse | null> {
+    return sendRequest({ type: 'update_options', sourceTabId, options });
 }

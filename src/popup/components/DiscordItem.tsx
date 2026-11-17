@@ -23,7 +23,7 @@ export function DiscordItem({
         }
     }
 
-    const disabled = tab.state === 'error';
+    const disabled = tab.status === 'error';
 
     return (
         <button

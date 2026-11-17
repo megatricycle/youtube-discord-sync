@@ -1,174 +1,185 @@
 import type {
-    YouTubeBackgroundMessage,
-    YouTubeMessage,
+    ContentMessage,
+    SerializedYouTubeMetadata,
+    SourceContentMessage,
+    SourceOptionsResponse,
+    TabStatus,
     YouTubeMetadata,
-    YouTubeSyncOptions,
-    YouTubeTabInformationResponse,
-    YouTubeTimestampResponse,
+    YouTubeTabReport,
 } from '../types';
+
+const DEFAULT_OFFSET = 3;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
-function isYouTubeSyncOptions(
-    value: unknown,
-): value is Partial<YouTubeSyncOptions> {
-    if (!isRecord(value)) {
-        return false;
-    }
-
+function isSourceContentMessage(
+    request: unknown,
+): request is SourceContentMessage {
     return (
-        (value.offset === undefined || typeof value.offset === 'number') &&
-        (value.isPaused === undefined || typeof value.isPaused === 'boolean') &&
-        (value.isPremiere === undefined ||
-            typeof value.isPremiere === 'boolean')
+        isRecord(request) &&
+        request.type === 'options_updated' &&
+        typeof request.offset === 'number'
     );
 }
 
-function isYouTubeMessage(request: unknown): request is YouTubeMessage {
-    if (!isRecord(request)) {
-        return false;
+function serializeMetadata(
+    metadata: YouTubeMetadata | null,
+): SerializedYouTubeMetadata | null {
+    if (!metadata) {
+        return null;
     }
 
-    switch (request.message) {
-        case 'fetch_info':
-        case 'fetch_timestamp':
-            return true;
-        case 'sync_start':
-        case 'sync_stop':
-            return typeof request.targetTabId === 'number';
-        case 'sync_option_update':
-            return isYouTubeSyncOptions(request.options);
-        default:
-            return false;
-    }
+    return {
+        ...metadata,
+        startDateTime: metadata.startDateTime.toISOString(),
+        endDateTime: metadata.endDateTime.toISOString(),
+    };
 }
 
 async function run(): Promise<void> {
-    let tabsToSync: number[] = [];
-    let options: YouTubeSyncOptions = {
-        offset: 3,
-        isPaused: false,
-        isPremiere: false,
-    };
+    let offset = DEFAULT_OFFSET;
+    let metadata: YouTubeMetadata | null = null;
+    let status: TabStatus = 'invalid';
+    let error: string | null = null;
+    let lastReport: string | null = null;
 
-    const microformatElement =
-        await waitForElement<HTMLElement>('#microformat');
-    const videoStreamElement =
-        await waitForElement<HTMLVideoElement>('.video-stream');
-
-    let metadata = getMetadata();
-
-    function handleMessage(
-        request: unknown,
-        sendResponse: (response?: unknown) => void,
-    ) {
-        if (!isYouTubeMessage(request)) {
-            return;
-        }
-
-        if (request.message === 'fetch_info') {
-            sendResponse({
-                metadata,
-                activeSyncs: tabsToSync,
-                options,
-            } satisfies YouTubeTabInformationResponse);
-        }
-
-        if (request.message === 'sync_start') {
-            const { targetTabId } = request;
-
-            syncStart(targetTabId);
-            chrome.runtime.sendMessage({
-                message: 'sync_start',
-                targetTabId,
-            } satisfies YouTubeBackgroundMessage);
-        }
-
-        if (request.message === 'sync_stop') {
-            const { targetTabId } = request;
-
-            syncStop(targetTabId);
-            chrome.runtime.sendMessage({
-                message: 'sync_stop',
-                targetTabId,
-            } satisfies YouTubeBackgroundMessage);
-        }
-
-        if (request.message === 'sync_option_update') {
-            options = { ...options, ...request.options };
-        }
-
-        if (request.message === 'fetch_timestamp') {
-            if (!videoStreamElement) {
-                sendResponse({
-                    timestamp: null,
-                } satisfies YouTubeTimestampResponse);
-
-                return;
-            }
-
-            sendResponse({
-                timestamp: getTimestamp(),
-            } satisfies YouTubeTimestampResponse);
-        }
-    }
-
-    chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-        handleMessage(request, sendResponse);
-    });
-
-    if (!microformatElement || !videoStreamElement) {
-        return;
-    }
+    // Assigned once the page has been inspected.
+    let videoStreamElement: HTMLVideoElement | null = null;
 
     function getTimestamp(): string | null {
         if (!videoStreamElement || !metadata) {
             return null;
         }
 
-        const currentTime = videoStreamElement.currentTime;
-        const duration = videoStreamElement.duration;
+        const { currentTime, duration } = videoStreamElement;
 
         let startDateTime = metadata.startDateTime;
 
         if (metadata.isPremiere) {
-            // startDateTime does not include the countdown timer
-            // Instead, lets figure out the startDateTime by using the video length and endStartDate
-            // Why not use that for actual livestreams? I don't know, when I do this for livestreams, there's a noticable delay in chat
+            // startDateTime does not include the countdown timer, so derive it
+            // from the video length and the end date instead. Doing this for
+            // real livestreams adds a noticeable delay to chat.
+            if (!Number.isFinite(duration)) {
+                return null;
+            }
+
             startDateTime = new Date(
                 metadata.endDateTime.getTime() - duration * 1000,
             );
         }
 
-        return new Date(
-            startDateTime.getTime() + (currentTime - options.offset) * 1000,
-        ).toISOString();
+        const timestamp = new Date(
+            startDateTime.getTime() + (currentTime - offset) * 1000,
+        );
+
+        if (Number.isNaN(timestamp.getTime())) {
+            return null;
+        }
+
+        return timestamp.toISOString();
     }
 
-    // always send a timestamp update whenever the main video element is played
-    function handleTimeUpdate() {
-        if (options.isPaused) {
+    function report(timestamp: string | null): void {
+        const report: YouTubeTabReport = {
+            type: 'youtube',
+            url: location.href,
+            status,
+            error,
+            metadata: serializeMetadata(metadata),
+            offset,
+        };
+        const serialized = JSON.stringify(report);
+
+        if (serialized === lastReport) {
             return;
         }
 
-        const timestamp = getTimestamp();
+        lastReport = serialized;
 
-        tabsToSync.forEach((tabId) => {
-            chrome.runtime.sendMessage({
-                message: 'video_timeupdate',
-                tabId: tabId,
+        void chrome.runtime
+            .sendMessage({
+                type: 'update_source_tab',
+                report,
                 timestamp,
-            } satisfies YouTubeBackgroundMessage);
-        });
+            } satisfies ContentMessage)
+            .catch(() => undefined);
     }
 
-    videoStreamElement.addEventListener('timeupdate', handleTimeUpdate);
+    function refreshMetadata(): void {
+        try {
+            metadata = getMetadata();
+            status = metadata ? 'active' : 'invalid';
+            error = null;
+        } catch (metadataError) {
+            metadata = null;
+            status = 'error';
+            error =
+                metadataError instanceof Error
+                    ? metadataError.message
+                    : String(metadataError);
+        }
+    }
 
-    // everytime the metadata changes, update the metadata internal state
+    chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+        if (!isSourceContentMessage(request)) {
+            return false;
+        }
+
+        offset = request.offset;
+
+        // The response carries the recalculated timestamp so the background can
+        // cache it before the popup refetches.
+        sendResponse({
+            timestamp: getTimestamp(),
+        } satisfies SourceOptionsResponse);
+
+        return false;
+    });
+
+    window.addEventListener('pagehide', () => {
+        void chrome.runtime
+            .sendMessage({ type: 'unregister_tab' } satisfies ContentMessage)
+            .catch(() => undefined);
+    });
+
+    window.addEventListener('pageshow', (event) => {
+        if (event.persisted) {
+            lastReport = null;
+            report(getTimestamp());
+        }
+    });
+
+    const microformatElement =
+        await waitForElement<HTMLElement>('#microformat');
+    videoStreamElement =
+        await waitForElement<HTMLVideoElement>('.video-stream');
+
+    refreshMetadata();
+    report(getTimestamp());
+
+    if (!microformatElement || !videoStreamElement) {
+        // Not a watch page: stay registered as invalid so the popup can show
+        // the "open a VOD" guidance.
+        return;
+    }
+
+    // Report on every tick. The background decides whether an update is
+    // forwarded to Discord, so a paused video still keeps the popup clock live.
+    videoStreamElement.addEventListener('timeupdate', () => {
+        void chrome.runtime
+            .sendMessage({
+                type: 'video_timeupdate',
+                timestamp: getTimestamp(),
+            } satisfies ContentMessage)
+            .catch(() => undefined);
+    });
+
+    // YouTube swaps the microformat out when the video changes.
     const microformatObserver = new MutationObserver(() => {
-        metadata = getMetadata();
+        refreshMetadata();
+        report(getTimestamp());
     });
 
     microformatObserver.observe(microformatElement, {
@@ -176,35 +187,27 @@ async function run(): Promise<void> {
         subtree: true,
     });
 
-    // reset the metadata information when navigating away from a video, and close any ongoing syncs
+    // Navigating away from a video clears the `src` attribute. Reporting the
+    // tab as invalid is what tears the sync sessions down.
     const videoStreamObserver = new MutationObserver(() => {
-        if (!videoStreamElement.hasAttribute('src')) {
-            metadata = null;
+        if (videoStreamElement?.hasAttribute('src')) {
+            if (status === 'active') {
+                return;
+            }
 
-            clearAllSync();
+            refreshMetadata();
+            report(getTimestamp());
+
+            return;
         }
+
+        metadata = null;
+        status = 'invalid';
+        error = null;
+        report(null);
     });
 
     videoStreamObserver.observe(videoStreamElement, { attributes: true });
-
-    function syncStart(tabId: number) {
-        tabsToSync.push(tabId);
-    }
-
-    function syncStop(tabId: number) {
-        tabsToSync = tabsToSync.filter((_tabId) => tabId !== _tabId);
-    }
-
-    function clearAllSync() {
-        tabsToSync.forEach((tabId) => {
-            chrome.runtime.sendMessage({
-                message: 'sync_stop',
-                targetTabId: tabId,
-            } satisfies YouTubeBackgroundMessage);
-        });
-
-        tabsToSync = [];
-    }
 }
 
 run();

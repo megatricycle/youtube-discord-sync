@@ -37,14 +37,10 @@ type ExtensionChromeApi = {
         query(queryInfo: {
             url: string;
         }): Promise<Array<{ id?: number; url?: string }>>;
-        sendMessage<T>(
-            tabId: number,
-            message: { message: string; tabId?: number },
-        ): Promise<T>;
     };
     runtime: {
         getURL(path: string): string;
-        sendMessage<T>(message: PopupBridgeRequest): Promise<T>;
+        sendMessage<T>(message: unknown): Promise<T>;
     };
     action: { openPopup(): Promise<void> };
     scripting: {
@@ -128,9 +124,13 @@ const popupHarnessScript = readFixture('popup_test_harness.js');
 let context: BrowserContext | undefined;
 let userDataDir: string | undefined;
 let temporaryExtensionDir: string | undefined;
+let activeServiceWorker: Worker | undefined;
+let bridgePage: Page | undefined;
 
 /** Closes the browser and removes the temporary profile/extension copies. */
 export async function cleanupExtensionTest(): Promise<void> {
+    activeServiceWorker = undefined;
+    bridgePage = undefined;
     await context?.close();
     context = undefined;
 
@@ -174,7 +174,17 @@ export async function launchExtension(extensionPath?: string): Promise<Worker> {
     }
 
     expect(serviceWorker.url()).toMatch(/^chrome-extension:\/\//);
+    activeServiceWorker = serviceWorker;
+
     return serviceWorker;
+}
+
+function getActiveServiceWorker(): Worker {
+    if (!activeServiceWorker) {
+        throw new Error('launchExtension() has not been called yet');
+    }
+
+    return activeServiceWorker;
 }
 
 /**
@@ -262,82 +272,137 @@ export async function createRandomWebpagePage(): Promise<Page> {
 }
 
 /**
- * Waits until a page's real content script answers a message. This keeps the
- * tests on the same footing as the app: they can only proceed once the
- * extension has actually injected and registered its listener, rather than
- * assuming a fixed timing.
+ * Waits until the background registry knows about a page's content script.
+ *
+ * Content scripts now register themselves instead of answering a probe, so the
+ * `probe` argument selects which registration to wait for: `fetch_info` for a
+ * YouTube tab, `get_tab_information` for a Discord tab.
  */
 export async function waitForContentScript(
     serviceWorker: Worker,
     page: Page,
-    message: string,
+    probe: 'fetch_info' | 'get_tab_information',
 ): Promise<void> {
     const tabId = await getTabId(serviceWorker, page.url());
+    const kind = probe === 'fetch_info' ? 'youtube' : 'discord';
 
     await expect
-        .poll(
-            async () => {
-                try {
-                    return await serviceWorker.evaluate(
-                        async ({ tabId, message }) => {
-                            const extensionChrome =
-                                globalThis as typeof globalThis & {
-                                    chrome: ExtensionChromeApi;
-                                };
-
-                            await extensionChrome.chrome.tabs.sendMessage(
-                                tabId,
-                                { message },
-                            );
-                            return true;
-                        },
-                        { tabId, message },
-                    );
-                } catch {
-                    return false;
-                }
-            },
-            { timeout: 10_000 },
-        )
+        .poll(() => isTabRegistered(serviceWorker, tabId, kind), {
+            timeout: 10_000,
+        })
         .toBe(true);
 }
 
+async function isTabRegistered(
+    serviceWorker: Worker,
+    tabId: number,
+    kind: 'youtube' | 'discord',
+): Promise<boolean> {
+    const request =
+        kind === 'youtube'
+            ? { type: 'get_source_tab_information', tabId }
+            : { type: 'get_discord_tab_information', tabId };
+
+    const tab = await sendExtensionRequest(serviceWorker, request);
+
+    return tab !== null && tab !== undefined;
+}
+
 /**
- * Asks the real YouTube content script for its current computed timestamp,
- * the same value the app uses to position Discord chat.
+ * Sends a message to the background from an extension page.
+ *
+ * A service worker cannot message itself: `chrome.runtime.sendMessage` never
+ * reaches the sender's own `onMessage` listener. The harness therefore needs a
+ * real extension context to ask the background about the registry.
+ */
+async function sendExtensionRequest<T>(
+    serviceWorker: Worker,
+    request: unknown,
+): Promise<T | null> {
+    const page = await getExtensionBridgePage(serviceWorker);
+
+    return page.evaluate(async (request) => {
+        const extensionChrome = globalThis as typeof globalThis & {
+            chrome: ExtensionChromeApi;
+        };
+
+        try {
+            return (
+                (await extensionChrome.chrome.runtime.sendMessage(request)) ??
+                null
+            );
+        } catch {
+            return null;
+        }
+    }, request) as Promise<T | null>;
+}
+
+async function getExtensionBridgePage(serviceWorker: Worker): Promise<Page> {
+    if (bridgePage && !bridgePage.isClosed()) {
+        return bridgePage;
+    }
+
+    const { host } = new URL(serviceWorker.url());
+    bridgePage = await getContext().newPage();
+    await bridgePage.goto(
+        `chrome-extension://${host}/e2e-registry-bridge.html`,
+    );
+
+    return bridgePage;
+}
+
+async function readPlaybackTimestamp(
+    serviceWorker: Worker,
+    tabId: number,
+): Promise<string | null> {
+    const response = await sendExtensionRequest<{ timestamp: string | null }>(
+        serviceWorker,
+        { type: 'get_playback_timestamp', tabId },
+    );
+
+    return response?.timestamp ?? null;
+}
+
+/**
+ * Reads the timestamp the background cached for a YouTube tab, which is the
+ * same value the app displays.
  */
 export async function getYoutubeTimestamp(
     serviceWorker: Worker,
     youtubePage: Page,
 ): Promise<string> {
     const tabId = await getTabId(serviceWorker, youtubePage.url());
-    const response = await serviceWorker.evaluate(async (tabId) => {
-        const extensionChrome = globalThis as typeof globalThis & {
-            chrome: ExtensionChromeApi;
-        };
-        return extensionChrome.chrome.tabs.sendMessage<{
-            timestamp: string | null;
-        }>(tabId, { message: 'fetch_timestamp' });
-    }, tabId);
+    const timestamp = await readPlaybackTimestamp(serviceWorker, tabId);
 
-    if (!response.timestamp) {
+    if (!timestamp) {
         throw new Error('YouTube fixture did not produce a timestamp');
     }
 
-    return response.timestamp;
+    return timestamp;
 }
 
 /**
  * Advances the fixture video by one second and dispatches a real
  * `timeupdate`, which is the same event the extension listens for during
- * playback. This deliberately avoids calling any extension API directly.
+ * playback. Resolves only once the background has cached the new timestamp, so
+ * a following read cannot race the report.
  */
 export async function dispatchTimeUpdate(youtubePage: Page): Promise<void> {
+    const serviceWorker = getActiveServiceWorker();
+    const tabId = await getTabId(serviceWorker, youtubePage.url());
+    const previousTimestamp = await readPlaybackTimestamp(serviceWorker, tabId);
+
     await youtubePage.locator('.video-stream').evaluate((element) => {
         const video = element as HTMLVideoElement;
         video.currentTime += 1;
         video.dispatchEvent(new Event('timeupdate'));
     });
+
+    await expect
+        .poll(() => readPlaybackTimestamp(serviceWorker, tabId), {
+            timeout: 5_000,
+        })
+        .not.toBe(previousTimestamp);
 }
 
 /**
@@ -460,6 +525,16 @@ export async function createTestExtension(
     writeFileSync(
         join(temporaryExtensionPath, 'e2e-popup.js'),
         popupHarnessScript,
+    );
+    writeFileSync(
+        join(temporaryExtensionPath, 'e2e-registry-bridge.html'),
+        [
+            '<!doctype html>',
+            '<html>',
+            '    <head><meta charset="utf-8" /><title>e2e</title></head>',
+            '    <body></body>',
+            '</html>',
+        ].join('\n'),
     );
 
     const manifestPath = join(temporaryExtensionPath, 'manifest.json');

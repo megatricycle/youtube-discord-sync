@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { BackgroundMessage } from '../../types';
-import { getCurrentTab } from '../utils/chrome';
+import type { SourceId } from '../../types';
+import { getCurrentTab, getTabContext } from '../utils/chrome';
 import { Default } from './Default';
 import { Discord } from './Discord';
 import { YouTube } from './YouTube';
 
 function App() {
-    const [mode, setMode] = useState<'youtube' | 'discord' | 'default' | null>(
+    const [mode, setMode] = useState<SourceId | 'discord' | 'default' | null>(
         null,
     );
 
@@ -14,20 +14,20 @@ function App() {
         async function run() {
             const tab = await getCurrentTab();
 
-            const url = new URL(tab.url ?? '');
-
-            if (url.hostname.includes('youtube.com')) {
-                setMode('youtube');
-            } else if (url.hostname.includes('discord.com')) {
-                setMode('discord');
-            } else {
+            if (typeof tab?.id !== 'number') {
                 setMode('default');
+
+                return;
             }
 
-            chrome.runtime.sendMessage({
-                message: 'popup_opened',
-                tabId: tab.id!,
-            } satisfies BackgroundMessage);
+            // The background decides from the tab's URL, not from whether a
+            // content script registered, so an unreachable tab still reaches
+            // the page that reports the problem.
+            const { type } = await getTabContext(tab.id);
+
+            // A source id routes to that source's own page; everything else is
+            // the Discord target or a page the extension does not handle.
+            setMode(type === 'other' ? 'default' : type);
         }
 
         run();
@@ -37,7 +37,9 @@ function App() {
 
     if (mode === 'youtube') {
         return <YouTube />;
-    } else if (mode === 'discord') {
+    }
+
+    if (mode === 'discord') {
         return <Discord />;
     }
 

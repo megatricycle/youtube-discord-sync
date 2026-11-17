@@ -1,20 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { FaPause, FaPlay } from 'react-icons/fa';
-import type {
-    YouTubeMessage,
-    YouTubeSyncOptions,
-    YouTubeTabInformationValid,
-    YouTubeTimestampResponse,
-} from '../../types';
+import type { SyncOptions, YouTubeTabInformationValid } from '../../types';
+import { getPlaybackTimestamp } from '../utils/chrome';
 import { ClearButton } from './ClearButton';
 
 type YouTubeSyncProps = {
     tab: YouTubeTabInformationValid;
-    onOptionChange?: (option: Partial<YouTubeSyncOptions>) => void;
+    onOptionChange?: (option: Partial<SyncOptions>) => void;
 };
 
 export function YouTubeSync({ tab, onOptionChange }: YouTubeSyncProps) {
-    const [currentTimestamp, setCurrentTimestamp] = useState<Date | null>(null);
+    // The background caches the timestamp reported by the content script, so
+    // this is a registry read rather than a message to another tab.
+    const { data: timestamp } = useQuery({
+        queryKey: ['playbackTimestamp', tab.id],
+        queryFn: () => getPlaybackTimestamp(tab.id),
+        refetchInterval: 500,
+        retry: false,
+    });
+
+    const currentTimestamp = timestamp ? new Date(timestamp) : null;
 
     function handleTogglePause() {
         if (!onOptionChange) {
@@ -31,29 +36,6 @@ export function YouTubeSync({ tab, onOptionChange }: YouTubeSyncProps) {
 
         onOptionChange({ offset });
     }
-
-    function listenForTimestampUpdate() {
-        async function poll() {
-            const response: YouTubeTimestampResponse =
-                await chrome.tabs.sendMessage(tab.id, {
-                    message: 'fetch_timestamp',
-                } satisfies YouTubeMessage);
-
-            setCurrentTimestamp(
-                response.timestamp ? new Date(response.timestamp) : null,
-            );
-        }
-
-        poll();
-
-        const interval = setInterval(poll, 500);
-
-        return () => {
-            clearInterval(interval);
-        };
-    }
-
-    useEffect(listenForTimestampUpdate, [tab.id]);
 
     const readonly = !onOptionChange;
 
