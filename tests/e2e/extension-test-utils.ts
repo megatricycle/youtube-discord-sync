@@ -66,7 +66,14 @@ type PopupLocatorQuery =
       }
     | { kind: 'selector'; selector: string; last?: boolean };
 
-type PopupElementSnapshot = { text: string; value: string | null };
+type PopupElementSnapshot = {
+    text: string;
+    /** Includes visually hidden text, unlike `text`. */
+    textContent: string;
+    value: string | null;
+    disabled: boolean;
+    className: string;
+};
 
 type PopupBridgeRequest = {
     message: '__e2e_popup_bridge';
@@ -84,6 +91,9 @@ type PopupBridgeResponse = {
 type PopupLocator = {
     waitFor(options?: { state?: 'visible' }): Promise<void>;
     innerText(): Promise<string>;
+    textContent(): Promise<string>;
+    isDisabled(): Promise<boolean>;
+    className(): Promise<string>;
     count(): Promise<number>;
     click(): Promise<void>;
     fill(value: string): Promise<void>;
@@ -658,6 +668,27 @@ function createPopupPage(serviceWorker: Worker): PopupPage {
                     throw new Error('Native popup element not found');
                 }
                 return element.text;
+            },
+            async textContent() {
+                const [element] = await getElements();
+                if (!element) {
+                    throw new Error('Native popup element not found');
+                }
+                return element.textContent;
+            },
+            async isDisabled() {
+                const [element] = await getElements();
+                if (!element) {
+                    throw new Error('Native popup element not found');
+                }
+                return element.disabled;
+            },
+            async className() {
+                const [element] = await getElements();
+                if (!element) {
+                    throw new Error('Native popup element not found');
+                }
+                return element.className;
             },
             async count() {
                 return (await getElements()).length;

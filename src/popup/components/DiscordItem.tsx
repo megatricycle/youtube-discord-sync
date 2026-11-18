@@ -1,10 +1,12 @@
-import { FaExclamationCircle } from 'react-icons/fa';
-import { Tooltip } from 'react-tooltip';
+import clsx from 'clsx';
+import { FaSyncAlt } from 'react-icons/fa';
 import { DiscordTab } from '../../types';
 
 type DiscordItemProps = {
     tab: DiscordTab;
     syncing: boolean;
+    paused: boolean;
+    syncingElsewhere: boolean;
     onSync: () => void;
     onUnsync: () => void;
 };
@@ -12,18 +14,24 @@ type DiscordItemProps = {
 export function DiscordItem({
     tab,
     syncing,
+    paused,
+    syncingElsewhere,
     onSync,
     onUnsync,
 }: DiscordItemProps) {
+    const disabled = tab.status === 'error' || syncingElsewhere;
+
     function handleClick() {
+        if (disabled) {
+            return;
+        }
+
         if (syncing) {
             onUnsync();
         } else {
             onSync();
         }
     }
-
-    const disabled = tab.status === 'error';
 
     return (
         <button
@@ -35,16 +43,33 @@ export function DiscordItem({
                 {tab.channelName}
             </div>
             <div className="w-16 shrink-0 text-right flex justify-end">
-                {syncing && <span className="text-white/50">Syncing</span>}
-                {tab.error && (
-                    <>
-                        <FaExclamationCircle
-                            className="text-red-500 opacity-100"
-                            data-tooltip-id="error-tooltip"
-                            data-tooltip-content={tab.error}
+                {syncing && (
+                    <span
+                        className="text-emerald-400 inline-flex items-center"
+                        data-syncing="current"
+                    >
+                        <FaSyncAlt
+                            aria-hidden
+                            className={clsx(
+                                'size-3.5',
+                                !paused && 'motion-safe:animate-spin-slow',
+                            )}
                         />
-                        <Tooltip id="error-tooltip" />
-                    </>
+                        <span className="sr-only">
+                            {paused
+                                ? 'Syncing with this tab (paused)'
+                                : 'Syncing with this tab'}
+                        </span>
+                    </span>
+                )}
+                {syncingElsewhere && (
+                    <span
+                        className="text-white/50 inline-flex items-center"
+                        data-syncing="other"
+                    >
+                        <FaSyncAlt aria-hidden className="size-3.5" />
+                        <span className="sr-only">Syncing in another tab</span>
+                    </span>
                 )}
             </div>
         </button>

@@ -345,8 +345,15 @@ export async function startSync(
             return false;
         }
 
-        // A Discord tab follows one source at a time, so drop any previous
-        // pairing before recording this one.
+        const existingSourceTabId = findSourceTabIdForDiscordTab(discordTabId);
+
+        if (
+            existingSourceTabId !== null &&
+            existingSourceTabId !== sourceTabId
+        ) {
+            return false;
+        }
+
         removeDiscordTabFromSessions(discordTabId);
 
         const key = String(sourceTabId);
@@ -453,6 +460,7 @@ export async function getDiscordTabs(): Promise<DiscordTab[]> {
             error: entry.error,
             channelName: entry.channelName as string,
             serverName: entry.serverName,
+            syncingSourceTabId: findSourceTabIdForDiscordTab(entry.tabId),
         }));
 }
 

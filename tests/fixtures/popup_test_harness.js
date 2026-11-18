@@ -86,7 +86,12 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             ready: true,
             elements: elements.map((element) => ({
                 text: element.innerText ?? element.textContent ?? '',
+                textContent: element.textContent ?? '',
                 value: element.tagName === 'INPUT' ? element.value : null,
+                disabled: element.disabled === true,
+                // `element.className` is an SVGAnimatedString on SVG nodes,
+                // so read the attribute instead.
+                className: element.getAttribute('class') ?? '',
             })),
         });
         return true;

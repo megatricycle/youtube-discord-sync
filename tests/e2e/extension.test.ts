@@ -55,7 +55,7 @@ test('syncs a finished livestream to a Discord channel and shows sync informatio
 
     // there should be a indicator that syncing has started
     await expect
-        .poll(() => syncButton.innerText(), { timeout: 5_000 })
+        .poll(() => syncButton.textContent(), { timeout: 5_000 })
         .toContain('Syncing');
 
     // timestamp should update in the UI if an timeupdate event is dispatched
@@ -109,14 +109,14 @@ test('syncs two of three Discord channels and scrolls only those channels', asyn
         .poll(() =>
             popup
                 .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
-                .innerText(),
+                .textContent(),
         )
         .toContain('Syncing');
     await expect
         .poll(() =>
             popup
                 .getByRole('button', { name: new RegExp(CHANNELS[1], 'i') })
-                .innerText(),
+                .textContent(),
         )
         .toContain('Syncing');
 
@@ -131,6 +131,105 @@ test('syncs two of three Discord channels and scrolls only those channels', asyn
     await expectLatestChatVisibility(discordPages[0], eventTimestamp, true);
     await expectLatestChatVisibility(discordPages[1], eventTimestamp, true);
     await expectLatestChatVisibility(discordPages[2], eventTimestamp, false);
+});
+
+test('blocks a second source from taking over a syncing Discord tab', async () => {
+    const serviceWorker = await launchExtension();
+    const discordPage = await createDiscordChannelPage(
+        CHANNELS[0],
+        456,
+        SERVER_NAME,
+    );
+    // distinct URLs: a tab is looked up by its exact URL
+    const firstSource = await createYouTubePage(
+        youtubeFinishedFixture,
+        'https://www.youtube.com/watch?v=fixture-first',
+    );
+    // a different title, so the Discord popup shows who really owns the tab
+    const secondSource = await createYouTubePage(
+        youtubePremiereFixture,
+        'https://www.youtube.com/watch?v=fixture-second',
+    );
+    await waitForContentScript(
+        serviceWorker,
+        discordPage,
+        'get_tab_information',
+    );
+    await waitForContentScript(serviceWorker, firstSource, 'fetch_info');
+    await waitForContentScript(serviceWorker, secondSource, 'fetch_info');
+
+    // the first source claims the Discord channel
+    await firstSource.bringToFront();
+    const firstPopup = await openPopup(serviceWorker);
+    await firstPopup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+    const firstRow = firstPopup.getByRole('button', {
+        name: new RegExp(CHANNELS[0], 'i'),
+    });
+    await firstRow.click();
+
+    // the owned row stays interactive and uses the sync glyph
+    await expect.poll(() => firstRow.textContent()).toContain('Syncing');
+    await expect.poll(() => firstRow.isDisabled()).toBe(false);
+    const currentLabel = firstPopup.locator('[data-syncing="current"]');
+    await expect.poll(() => currentLabel.count()).toBe(1);
+    await expect
+        .poll(() => currentLabel.textContent())
+        .toContain('Syncing with this tab');
+    // read before switching tabs: the popup re-binds to the active tab
+    const currentLabelClassName = await currentLabel.className();
+    expect(currentLabelClassName).toContain('text-emerald-400');
+    const currentIcon = firstPopup.locator('[data-syncing="current"] svg');
+    await expect.poll(() => currentIcon.count()).toBe(1);
+    expect(await currentIcon.className()).toContain('animate-spin-slow');
+
+    // the second source sees the channel as taken over by another tab
+    await secondSource.bringToFront();
+    const secondPopup = await openPopup(serviceWorker);
+    await secondPopup
+        .getByText('Fixture premiere')
+        .waitFor({ state: 'visible' });
+    const blockedRow = secondPopup.getByRole('button', {
+        name: new RegExp(CHANNELS[0], 'i'),
+    });
+    await expect.poll(() => blockedRow.isDisabled()).toBe(true);
+    await expect.poll(() => blockedRow.textContent()).toContain('Syncing');
+
+    // the same glyph, held still and muted: motion is the only extra cue
+    const otherLabel = secondPopup.locator('[data-syncing="other"]');
+    await expect.poll(() => otherLabel.count()).toBe(1);
+    await expect
+        .poll(() => otherLabel.textContent())
+        .toContain('Syncing in another tab');
+    const otherLabelClassName = await otherLabel.className();
+    expect(otherLabelClassName).toContain('text-white/50');
+    expect(otherLabelClassName).not.toBe(currentLabelClassName);
+    const otherIcon = secondPopup.locator('[data-syncing="other"] svg');
+    await expect.poll(() => otherIcon.count()).toBe(1);
+    expect(await otherIcon.className()).not.toContain('animate-spin-slow');
+
+    // clicking the blocked row must not take the channel over
+    await blockedRow.click();
+    await expect.poll(() => blockedRow.isDisabled()).toBe(true);
+
+    // the first source still drives the channel
+    await dispatchTimeUpdate(firstSource);
+    const eventTimestamp = await getYoutubeTimestamp(
+        serviceWorker,
+        firstSource,
+    );
+    await expectLatestChatVisibility(discordPage, eventTimestamp, true);
+
+    // the channel still reports the first source, not the second
+    await discordPage.bringToFront();
+    const discordPopup = await openPopup(serviceWorker);
+    await discordPopup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+    await expect
+        .poll(() => discordPopup.getByText('Fixture premiere').count())
+        .toBe(0);
 });
 
 test('unsyncs a Discord channel and returns its popup to the sync selector', async () => {
@@ -167,7 +266,7 @@ test('unsyncs a Discord channel and returns its popup to the sync selector', asy
     await syncButton.click();
 
     // the channel should no longer show an active sync
-    await expect.poll(() => syncButton.innerText()).not.toContain('Syncing');
+    await expect.poll(() => syncButton.textContent()).not.toContain('Syncing');
 
     // advance playback after unsyncing
     await dispatchTimeUpdate(youtubePage);
@@ -238,9 +337,11 @@ test('unsyncs only one of two Discord channels', async () => {
     await generalButton.click();
 
     // only announcements should remain marked as syncing
-    await expect.poll(() => generalButton.innerText()).not.toContain('Syncing');
     await expect
-        .poll(() => announcementsButton.innerText())
+        .poll(() => generalButton.textContent())
+        .not.toContain('Syncing');
+    await expect
+        .poll(() => announcementsButton.textContent())
         .toContain('Syncing');
 
     // send another playback update
@@ -293,9 +394,21 @@ test('pausing stops further Discord scrolling', async () => {
     // confirm the matching chat is visible
     await expectLatestChatVisibility(discordPage, eventTimestamp, true);
 
+    // the syncing indicator spins while playback is following
+    const syncIcon = popup.locator('[data-syncing="current"] svg');
+    await expect
+        .poll(() => syncIcon.className())
+        .toContain('animate-spin-slow');
+
     // pause playback and send an update
-    await popup.locator('button:has(svg)').click();
+    await popup.locator('button[aria-label="Pause syncing"]').click();
     await popup.waitForTimeout(100);
+
+    // pausing freezes the indicator
+    await expect
+        .poll(() => syncIcon.className())
+        .not.toContain('animate-spin-slow');
+
     await dispatchTimeUpdate(youtubePage);
     eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
 
@@ -303,7 +416,13 @@ test('pausing stops further Discord scrolling', async () => {
     await expectLatestChatVisibility(discordPage, eventTimestamp, false);
 
     // resume playback and send another update
-    await popup.locator('button:has(svg)').click();
+    await popup.locator('button[aria-label="Resume syncing"]').click();
+    await popup.waitForTimeout(100);
+
+    // resuming starts the indicator again
+    await expect
+        .poll(() => syncIcon.className())
+        .toContain('animate-spin-slow');
     await popup.waitForTimeout(100);
     await dispatchTimeUpdate(youtubePage);
     eventTimestamp = await getYoutubeTimestamp(serviceWorker, youtubePage);
@@ -343,7 +462,7 @@ test('removing the YouTube video source stops its Discord sync', async () => {
         .poll(() =>
             popup
                 .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
-                .innerText(),
+                .textContent(),
         )
         .toContain('Syncing');
 
@@ -395,7 +514,7 @@ test('closing the YouTube source tab stops its Discord sync', async () => {
         .poll(() =>
             popup
                 .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
-                .innerText(),
+                .textContent(),
         )
         .toContain('Syncing');
 
@@ -440,7 +559,7 @@ test('navigating the YouTube source tab stops its Discord sync', async () => {
         .poll(() =>
             popup
                 .getByRole('button', { name: new RegExp(CHANNELS[0], 'i') })
-                .innerText(),
+                .textContent(),
         )
         .toContain('Syncing');
 

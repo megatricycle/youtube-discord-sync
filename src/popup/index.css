@@ -1,5 +1,15 @@
 @import 'tailwindcss';
 
+@theme {
+    --animate-spin-slow: spin-slow 2s linear infinite;
+
+    @keyframes spin-slow {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+}
+
 .react-tooltip {
     max-width: 200px;
 }

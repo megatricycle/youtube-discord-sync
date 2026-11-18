@@ -53,6 +53,7 @@ export function YouTube() {
             queryKey: ['youTubeTabInformation'],
         });
         queryClient.invalidateQueries({ queryKey: ['playbackTimestamp'] });
+        queryClient.invalidateQueries({ queryKey: ['discordTabs'] });
     }
 
     function handleOptionChange(options: Partial<SyncOptions>) {
@@ -118,6 +119,12 @@ export function YouTube() {
                                 tabInformation.syncingDiscordTabIds.includes(
                                     discordTab.id,
                                 ) && discordTab.status === 'active'
+                            }
+                            paused={tabInformation.options.isPaused}
+                            syncingElsewhere={
+                                discordTab.syncingSourceTabId !== null &&
+                                discordTab.syncingSourceTabId !==
+                                    tabInformation.id
                             }
                             onSync={() => handleSync(discordTab.id)}
                             onUnsync={() => handleUnsync(discordTab.id)}

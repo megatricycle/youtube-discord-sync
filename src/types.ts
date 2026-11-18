@@ -173,6 +173,7 @@ export type YouTubeTabInformationInvalid = Omit<
 export type DiscordTab = {
     id: number;
     error: string | null;
+    syncingSourceTabId: number | null;
 } & (
     | {
           status: 'active'; // available for syncing, or is already syncing

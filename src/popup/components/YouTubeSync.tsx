@@ -67,6 +67,11 @@ export function YouTubeSync({ tab, onOptionChange }: YouTubeSyncProps) {
                         {!readonly && (
                             <ClearButton
                                 className="text-xl"
+                                aria-label={
+                                    tab.options.isPaused
+                                        ? 'Resume syncing'
+                                        : 'Pause syncing'
+                                }
                                 onClick={handleTogglePause}
                             >
                                 {tab.options.isPaused ? (
