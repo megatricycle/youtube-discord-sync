@@ -2,7 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { DiscordTabInformation } from '../../types';
 import { getCurrentTab, getDiscordTabInformation } from '../utils/chrome';
 import { DiscordSyncSelector } from './DiscordSyncSelector';
+import { Loading } from './Loading';
 import { YouTubeSync } from './YouTubeSync';
+
+const RETRY = { retry: 15, retryDelay: 250 } as const;
 
 export function Discord() {
     const {
@@ -16,8 +19,7 @@ export function Discord() {
 
             return getDiscordTabInformation(currentTab.id!);
         },
-        retry: 2,
-        retryDelay: 250,
+        ...RETRY,
     });
 
     if (tabInformationError) {
@@ -28,7 +30,7 @@ export function Discord() {
     }
 
     if (!tabInformation || tabInformationIsLoading) {
-        return <div />;
+        return <Loading />;
     }
 
     if (tabInformation.currentSync?.type === 'youtube') {

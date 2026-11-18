@@ -115,6 +115,10 @@ export type PopupPage = {
 export const youtubeFinishedFixture = readFixture(
     'youtube_finished_livestream.html',
 );
+export const youtubeLatePlayerFixture = readFixture('youtube_late_player.html');
+export const youtubePendingMetadataFixture = readFixture(
+    'youtube_pending_metadata.html',
+);
 export const youtubeOngoingFixture = readFixture(
     'youtube_ongoing_livestream.html',
 );
@@ -514,12 +518,14 @@ export async function expectLatestChatVisibility(
  *   the real popup and exposes the DOM bridge Playwright needs; and
  * - the `scripting` permission is added for `setVideoDuration`.
  *
- * The `omitDiscordContentScript` option lets one test reproduce a missing
- * Discord listener. Everything else in the copy is the untouched `dist` build.
+ * The `omitDiscordContentScript` and `omitYouTubeContentScript` options let
+ * tests reproduce a tab whose content script never registered. Everything else
+ * in the copy is the untouched `dist` build.
  */
 export async function createTestExtension(
     options: {
         omitDiscordContentScript?: boolean;
+        omitYouTubeContentScript?: boolean;
     } = {},
 ): Promise<string> {
     const extensionPath = resolve(process.cwd(), 'dist');
@@ -555,9 +561,17 @@ export async function createTestExtension(
     };
     manifest.action.default_popup = 'e2e-popup.html';
     manifest.permissions = [...new Set([...manifest.permissions, 'scripting'])];
-    if (options.omitDiscordContentScript) {
+    const omittedScripts = [
+        options.omitDiscordContentScript ? 'discord/script.js' : null,
+        options.omitYouTubeContentScript ? 'youtube/script.js' : null,
+    ].filter((script) => script !== null);
+
+    if (omittedScripts.length) {
         manifest.content_scripts = manifest.content_scripts.filter(
-            (contentScript) => !contentScript.js.includes('discord/script.js'),
+            (contentScript) =>
+                !contentScript.js.some((script) =>
+                    omittedScripts.includes(script),
+                ),
         );
     }
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 4));

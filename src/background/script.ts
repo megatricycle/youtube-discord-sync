@@ -38,12 +38,17 @@ function isTabStatus(value: unknown): boolean {
     return value === 'active' || value === 'invalid' || value === 'error';
 }
 
+/** Source tabs also have the `pending` bootstrap state; Discord tabs do not. */
+function isSourceTabStatus(value: unknown): boolean {
+    return isTabStatus(value) || value === 'pending';
+}
+
 function isSourceTabReport(value: unknown): value is SourceTabReport {
     return (
         isRecord(value) &&
         isSourceId(value.type) &&
         typeof value.url === 'string' &&
-        isTabStatus(value.status) &&
+        isSourceTabStatus(value.status) &&
         isNullableString(value.error) &&
         typeof value.offset === 'number' &&
         (value.metadata === null || isRecord(value.metadata))

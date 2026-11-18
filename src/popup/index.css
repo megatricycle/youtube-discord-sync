@@ -2,10 +2,26 @@
 
 @theme {
     --animate-spin-slow: spin-slow 2s linear infinite;
+    --animate-dot: dot 1.2s ease-in-out infinite;
 
     @keyframes spin-slow {
         to {
             transform: rotate(360deg);
+        }
+    }
+
+    /* Typing-indicator dots: each dot lifts and brightens in turn. */
+    @keyframes dot {
+        0%,
+        60%,
+        100% {
+            opacity: 0.25;
+            transform: translateY(0);
+        }
+
+        30% {
+            opacity: 1;
+            transform: translateY(-0.25rem);
         }
     }
 }

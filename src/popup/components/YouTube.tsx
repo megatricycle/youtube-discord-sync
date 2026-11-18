@@ -14,14 +14,13 @@ import {
     updateSyncOptions,
 } from '../utils/chrome';
 import { DiscordItem } from './DiscordItem';
+import { Loading } from './Loading';
 import { SyncWithHeader } from './SyncWithHeader';
 import { YouTubeSync } from './YouTubeSync';
 
-/**
- * A couple of quick retries absorb the window where the popup opens before a
- * content script has registered, without delaying the error screen much.
- */
-const RETRY = { retry: 2, retryDelay: 250 } as const;
+const RETRY = { retry: 15, retryDelay: 250 } as const;
+
+const TAB_INFORMATION_REFETCH_MS = 1000;
 
 export function YouTube() {
     const queryClient = useQueryClient();
@@ -38,6 +37,7 @@ export function YouTube() {
             return getSourceTabInformation(currentTab.id!);
         },
         ...RETRY,
+        refetchInterval: TAB_INFORMATION_REFETCH_MS,
     });
 
     const { data: discordTabs, isLoading: discordTabsIsLoading } = useQuery<
@@ -89,8 +89,13 @@ export function YouTube() {
 
     const isLoading = tabInformationIsLoading || discordTabsIsLoading;
 
-    if (isLoading || !tabInformation || !discordTabs) {
-        return <div />;
+    if (
+        isLoading ||
+        !tabInformation ||
+        !discordTabs ||
+        tabInformation.status === 'pending'
+    ) {
+        return <Loading />;
     }
 
     if (tabInformation.status === 'error') {

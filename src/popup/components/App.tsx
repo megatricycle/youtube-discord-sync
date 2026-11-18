@@ -3,6 +3,7 @@ import type { SourceId } from '../../types';
 import { getCurrentTab, getTabContext } from '../utils/chrome';
 import { Default } from './Default';
 import { Discord } from './Discord';
+import { Loading } from './Loading';
 import { YouTube } from './YouTube';
 
 function App() {
@@ -34,6 +35,10 @@ function App() {
     }
 
     useEffect(startup, []);
+
+    if (mode === null) {
+        return <Loading />;
+    }
 
     if (mode === 'youtube') {
         return <YouTube />;

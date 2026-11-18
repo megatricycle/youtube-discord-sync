@@ -47,6 +47,17 @@ export type TabStatus =
     | 'error';
 
 /**
+ * A source tab can additionally be `pending`: the tab is on a page that may
+ * become syncable, but its metadata has not been read yet (YouTube renders a
+ * watch page in stages). It is not syncable yet, it must not tear down an
+ * existing sync, and it must not be reported as "not a VOD" - which is what
+ * made the popup show its guidance while a valid VOD was still loading.
+ *
+ * Discord has no such intermediate state and keeps using `TabStatus`.
+ */
+export type SourceTabStatus = TabStatus | 'pending';
+
+/**
  * What every source tab reports. `offset` is universal: a source with no notion
  * of an offset reports 0 and hides the control in its own popup page.
  *
@@ -56,7 +67,7 @@ export type TabStatus =
 export type SourceTabReportBase = {
     type: SourceId;
     url: string;
-    status: TabStatus;
+    status: SourceTabStatus;
     error: string | null;
     offset: number;
 };
@@ -146,7 +157,7 @@ export type TabContext = { type: SourceId | 'discord' | 'other' };
 
 export type YouTubeTabInformation = {
     id: number;
-    status: TabStatus;
+    status: SourceTabStatus;
     error: string | null;
     metadata: SerializedYouTubeMetadata | null;
     syncingDiscordTabIds: number[];

@@ -26,7 +26,7 @@ import type {
     TabStatus,
     YouTubeTabInformationValid,
 } from '../types';
-import { isSourceId } from './sources';
+import { isSourceId, sourceTabKey } from './sources';
 
 const REGISTRY_KEY = 'tabRegistry';
 
@@ -55,6 +55,11 @@ function isTabStatus(value: unknown): value is TabStatus {
     return value === 'active' || value === 'invalid' || value === 'error';
 }
 
+/** Source tabs also have the `pending` bootstrap state; Discord tabs do not. */
+function isSourceTabStatus(value: unknown): boolean {
+    return isTabStatus(value) || value === 'pending';
+}
+
 function isTabEntry(value: unknown): value is TabEntry {
     if (!isRecord(value) || typeof value.tabId !== 'number') {
         return false;
@@ -77,6 +82,10 @@ function isTabEntry(value: unknown): value is TabEntry {
 
     if (isSourceId(value.type)) {
         return (
+            isSourceTabStatus(value.status) &&
+            // Without this, a stored entry that lost its `metadata` key would
+            // pass `metadata !== null` in the popup and render undefined.
+            (value.metadata === null || isRecord(value.metadata)) &&
             typeof value.offset === 'number' &&
             typeof value.isPaused === 'boolean'
         );
@@ -210,11 +219,11 @@ function channelKey(url: string): string {
 }
 
 function findSourceTabIdForDiscordTab(discordTabId: number): number | null {
-    for (const [sourceTabKey, discordTabIds] of Object.entries(
+    for (const [sourceTabIdKey, discordTabIds] of Object.entries(
         state.syncSessions,
     )) {
         if (discordTabIds.includes(discordTabId)) {
-            return Number(sourceTabKey);
+            return Number(sourceTabIdKey);
         }
     }
 
@@ -231,7 +240,7 @@ function dropSyncSessions(sourceTabId: number): void {
 }
 
 function removeDiscordTabFromSessions(discordTabId: number): void {
-    for (const [sourceTabKey, discordTabIds] of Object.entries(
+    for (const [sourceTabIdKey, discordTabIds] of Object.entries(
         state.syncSessions,
     )) {
         const remaining = discordTabIds.filter(
@@ -243,9 +252,9 @@ function removeDiscordTabFromSessions(discordTabId: number): void {
         }
 
         if (remaining.length) {
-            state.syncSessions[sourceTabKey] = remaining;
+            state.syncSessions[sourceTabIdKey] = remaining;
         } else {
-            delete state.syncSessions[sourceTabKey];
+            delete state.syncSessions[sourceTabIdKey];
         }
     }
 }
@@ -262,6 +271,9 @@ export async function recordSourceTab(
     await mutate(() => {
         const existing = sourceEntry(tabId);
         const wasActive = existing?.status === 'active';
+        const previousKey =
+            existing === null ? null : sourceTabKey(existing.url);
+        const nextKey = sourceTabKey(report.url);
 
         state.tabs[String(tabId)] = {
             ...report,
@@ -271,10 +283,21 @@ export async function recordSourceTab(
 
         latestTimestamps.set(tabId, timestamp);
 
-        // Only the active -> invalid edge tears the pairing down. A tab that
-        // keeps reporting "invalid", or briefly loses its `src` mid-stream,
-        // must not drop twice.
-        if (wasActive && report.status !== 'active') {
+        // Only the active -> unusable edge tears the pairing down. A tab that
+        // keeps reporting "invalid" must not drop twice, and `pending` is a
+        // bootstrap state: a watch page that is still rendering would
+        // otherwise drop its sync on every re-render.
+        const leftActive =
+            wasActive &&
+            (report.status === 'invalid' || report.status === 'error');
+
+        // A tab can also move to another video without ever leaving `active`,
+        // and a `pending` report carries no metadata to compare, so identity
+        // comes from the URL. Two reports that name no item are not a change.
+        const changedVideo =
+            previousKey !== null && nextKey !== null && previousKey !== nextKey;
+
+        if (leftActive || changedVideo) {
             dropSyncSessions(tabId);
         }
     });

@@ -15,8 +15,10 @@ import {
     waitForContentScript,
     youtubeFinishedFixture,
     youtubeHomepageFixture,
+    youtubeLatePlayerFixture,
     youtubeMalformedFixture,
     youtubeOngoingFixture,
+    youtubePendingMetadataFixture,
     youtubePremiereFixture,
 } from './extension-test-utils';
 
@@ -24,6 +26,22 @@ afterEach(cleanupExtensionTest);
 
 const CHANNELS = ['#general', '#announcements', '#memes'] as const;
 const SERVER_NAME = 'The Example Discord Server';
+const VOD_GUIDANCE = 'Go to a YouTube livestream VOD to start syncing';
+
+/** The microformat of `youtube_finished_livestream.html`, for injecting late. */
+const FINISHED_LIVESTREAM_MICROFORMAT = JSON.stringify({
+    '@id': 'https://www.youtube.com/watch?v=fixture-video',
+    name: 'Fixture finished livestream',
+    author: 'Fixture channel',
+    thumbnailUrl: ['https://example.test/thumbnail.jpg'],
+    publication: [
+        {
+            isLiveBroadcast: true,
+            startDate: '2024-01-01T00:00:00.000Z',
+            endDate: '2024-01-01T01:00:00.000Z',
+        },
+    ],
+});
 
 test('syncs a finished livestream to a Discord channel and shows sync information there', async () => {
     const serviceWorker = await launchExtension();
@@ -432,7 +450,7 @@ test('pausing stops further Discord scrolling', async () => {
     await expectLatestChatVisibility(discordPage, eventTimestamp, true);
 });
 
-test('removing the YouTube video source stops its Discord sync', async () => {
+test('navigating in place away from the video stops its Discord sync', async () => {
     const serviceWorker = await launchExtension();
     const discordPage = await createDiscordChannelPage(
         CHANNELS[0],
@@ -466,10 +484,12 @@ test('removing the YouTube video source stops its Discord sync', async () => {
         )
         .toContain('Syncing');
 
-    // remove the YouTube source to trigger sync cleanup
-    await youtubePage.locator('.video-stream').evaluate((video) => {
-        video.setAttribute('src', 'fixture-source');
-        video.removeAttribute('src');
+    // leave the video the way YouTube does: in place, without a page load.
+    // Detaching the player's `src` on its own must not be enough to end the
+    // sync, because the player does that while it switches streams.
+    await youtubePage.evaluate(() => {
+        history.pushState({}, '', '/');
+        document.querySelector('#microformat')?.replaceChildren();
     });
 
     await discordPage.bringToFront();
@@ -727,6 +747,113 @@ test('a YouTube homepage shows the VOD guidance', async () => {
         .waitFor({ state: 'visible' });
 });
 
+test('a watch page whose player appears late still registers', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(youtubeLatePlayerFixture);
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    // open the popup before the player element exists
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+
+    // the VOD is usable from its metadata alone, so no guidance is shown
+    await popup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+    expect(await popup.getByText(VOD_GUIDANCE).count()).toBe(0);
+
+    // the player appears long after the old bootstrap window would have expired
+    await youtubePage.waitForTimeout(2500);
+    await youtubePage.evaluate(() => {
+        const video = document.createElement('video');
+        video.className = 'video-stream';
+        document.body.append(video);
+    });
+
+    // give the debounced inspection time to attach to the new player
+    await youtubePage.waitForTimeout(500);
+
+    // the late player is picked up and starts reporting playback
+    await dispatchTimeUpdate(youtubePage);
+    expect(await getYoutubeTimestamp(serviceWorker, youtubePage)).toBe(
+        '2023-12-31T23:59:58.000Z',
+    );
+});
+
+test('a watch page whose metadata appears late still registers', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(youtubePendingMetadataFixture);
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+
+    // a watch page that has not rendered its metadata waits on the loading page
+    await popup.locator('[role="status"]').waitFor({ state: 'visible' });
+
+    // YouTube swaps the microformat in once the watch data is available
+    await youtubePage.evaluate((microformat) => {
+        const script = document.createElement('script');
+        script.type = 'application/ld+json';
+        script.textContent = microformat;
+        document.querySelector('#microformat')?.append(script);
+    }, FINISHED_LIVESTREAM_MICROFORMAT);
+
+    await popup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+});
+
+test('navigating in place from the homepage to a livestream registers', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(
+        youtubeHomepageFixture,
+        'https://www.youtube.com/',
+    );
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup.getByText(VOD_GUIDANCE).waitFor({ state: 'visible' });
+
+    // YouTube navigates with `pushState`, so the content script never reloads
+    await youtubePage.evaluate((microformat) => {
+        history.pushState({}, '', '/watch?v=fixture-video');
+        const script = document.createElement('script');
+        script.type = 'application/ld+json';
+        script.textContent = microformat;
+        document.querySelector('#microformat')?.append(script);
+    }, FINISHED_LIVESTREAM_MICROFORMAT);
+
+    await popup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+});
+
+test('a transient player source reset keeps the VOD registered', async () => {
+    const serviceWorker = await launchExtension();
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+    await waitForContentScript(serviceWorker, youtubePage, 'fetch_info');
+
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+    await popup
+        .getByText('Fixture finished livestream')
+        .waitFor({ state: 'visible' });
+
+    // YouTube detaches the media source while it switches streams
+    await youtubePage.locator('.video-stream').evaluate((element) => {
+        element.setAttribute('src', 'blob:fixture');
+        element.removeAttribute('src');
+    });
+    await popup.waitForTimeout(1000);
+
+    expect(await popup.getByText('Fixture finished livestream').count()).toBe(
+        1,
+    );
+    expect(await popup.getByText(VOD_GUIDANCE).count()).toBe(0);
+});
+
 test('opening the popup on Discord shows the sync option selector', async () => {
     const serviceWorker = await launchExtension();
     const discordPage = await createDiscordChannelPage(
@@ -777,6 +904,31 @@ test('opening the popup on another website shows Welcome', async () => {
 
     // show the welcome message
     await popup.getByText(/Welcome!/).waitFor({ state: 'visible' });
+});
+
+test('shows the loading page until the YouTube content script registers', async () => {
+    const extensionPath = await createTestExtension({
+        omitYouTubeContentScript: true,
+    });
+    const serviceWorker = await launchExtension(extensionPath);
+    const youtubePage = await createYouTubePage(youtubeFinishedFixture);
+
+    // the tab is a YouTube watch page, but nothing has registered for it yet
+    await youtubePage.bringToFront();
+    const popup = await openPopup(serviceWorker);
+
+    // so the popup waits instead of claiming the tab is broken
+    await popup.locator('[role="status"]').waitFor({ state: 'visible' });
+    expect(
+        await popup
+            .getByText('Something went wrong. Please refresh the page.')
+            .count(),
+    ).toBe(0);
+
+    // the failure is still reported once the retries are exhausted
+    await popup
+        .getByText('Something went wrong. Please refresh the page.')
+        .waitFor({ state: 'visible' });
 });
 
 test('shows an error when fetching YouTube information fails', async () => {
