@@ -26,7 +26,8 @@ afterEach(cleanupExtensionTest);
 
 const CHANNELS = ['#general', '#announcements', '#memes'] as const;
 const SERVER_NAME = 'The Example Discord Server';
-const VOD_GUIDANCE = 'Go to a YouTube livestream VOD to start syncing';
+const VOD_GUIDANCE =
+    'To start, go to a YouTube livestream VOD or premiere to start syncing.';
 
 /** The microformat of `youtube_finished_livestream.html`, for injecting late. */
 const FINISHED_LIVESTREAM_MICROFORMAT = JSON.stringify({
@@ -723,9 +724,7 @@ test('an ongoing livestream shows the VOD guidance', async () => {
     const popup = await openPopup(serviceWorker);
 
     // direct the user to a finished livestream VOD
-    await popup
-        .getByText('Go to a YouTube livestream VOD to start syncing')
-        .waitFor({ state: 'visible' });
+    await popup.getByText(VOD_GUIDANCE).waitFor({ state: 'visible' });
 });
 
 test('a YouTube homepage shows the VOD guidance', async () => {
@@ -742,9 +741,7 @@ test('a YouTube homepage shows the VOD guidance', async () => {
     const popup = await openPopup(serviceWorker);
 
     // direct the user to a finished livestream VOD
-    await popup
-        .getByText('Go to a YouTube livestream VOD to start syncing')
-        .waitFor({ state: 'visible' });
+    await popup.getByText(VOD_GUIDANCE).waitFor({ state: 'visible' });
 });
 
 test('a watch page whose player appears late still registers', async () => {

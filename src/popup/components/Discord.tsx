@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { DiscordTabInformation } from '../../types';
 import { getCurrentTab, getDiscordTabInformation } from '../utils/chrome';
 import { DiscordSyncSelector } from './DiscordSyncSelector';
+import { ErrorPage } from './ErrorPage';
 import { Loading } from './Loading';
 import { YouTubeSync } from './YouTubeSync';
 
@@ -23,10 +24,7 @@ export function Discord() {
     });
 
     if (tabInformationError) {
-        // @TODO:
-        console.error(tabInformationError);
-
-        return <div>Something went wrong. Please refresh the page.</div>;
+        return <ErrorPage />;
     }
 
     if (!tabInformation || tabInformationIsLoading) {

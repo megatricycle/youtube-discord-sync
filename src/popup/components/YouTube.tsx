@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { FaYoutube } from 'react-icons/fa';
 import type {
     DiscordTab,
     SyncOptions,
@@ -14,6 +15,8 @@ import {
     updateSyncOptions,
 } from '../utils/chrome';
 import { DiscordItem } from './DiscordItem';
+import { ErrorPage } from './ErrorPage';
+import { GenericMessagePage } from './GenericMessagePage';
 import { Loading } from './Loading';
 import { SyncWithHeader } from './SyncWithHeader';
 import { YouTubeSync } from './YouTubeSync';
@@ -80,11 +83,8 @@ export function YouTube() {
         void stopSync(tabInformation.id, tabId).then(refresh);
     }
 
-    if (tabInformationError) {
-        // @TODO:
-        console.error(tabInformationError);
-
-        return <div>Something went wrong. Please refresh the page.</div>;
+    if (tabInformationError || tabInformation?.status === 'error') {
+        return <ErrorPage />;
     }
 
     const isLoading = tabInformationIsLoading || discordTabsIsLoading;
@@ -98,12 +98,15 @@ export function YouTube() {
         return <Loading />;
     }
 
-    if (tabInformation.status === 'error') {
-        return <div>Something went wrong. Please refresh the page.</div>;
-    }
-
     if (!hasMetadata(tabInformation)) {
-        return <div>Go to a YouTube livestream VOD to start syncing</div>;
+        return (
+            <GenericMessagePage icon={FaYoutube}>
+                <p>
+                    To start, go to a YouTube livestream VOD or premiere to
+                    start syncing.
+                </p>
+            </GenericMessagePage>
+        );
     }
 
     return (
